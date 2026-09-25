@@ -1,19 +1,26 @@
 import { Module, OnModuleDestroy, Inject } from '@nestjs/common';
 import { createPool } from 'mysql2/promise';
 import type { Pool } from 'mysql2/promise';
+import { existsSync } from 'node:fs';
 
 export const DB_POOL = 'DB_POOL';
-
-// La conexión a la base de datos de la agenda.
-const DATABASE_URL = 'mysql://root:cielos100@localhost:3306/agenda';
 
 @Module({
   providers: [
     {
       provide: DB_POOL,
       useFactory: () => {
-        console.log('Conectando a ' + DATABASE_URL);
-        return createPool({ uri: DATABASE_URL });
+        // Cada quien tiene su propia base: la cadena de conexión vive en .env
+        // (no se sube a git). Si no hay .env, se usa la variable del sistema.
+        if (existsSync('.env')) process.loadEnvFile();
+        const url = process.env.DATABASE_URL;
+        if (!url) {
+          throw new Error(
+            'Falta DATABASE_URL: copia .env.example a .env y pon tus datos',
+          );
+        }
+        console.log('Conectando a ' + url);
+        return createPool({ uri: url });
       },
     },
   ],

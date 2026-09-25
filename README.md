@@ -17,7 +17,8 @@ integra a `main` por pull request.
 
 ```bash
 npm install
-mysql -u root -p < db/schema.sql     # crea la base `agenda` (borra contactos existentes)
+cp .env.example .env               # y pon tu usuario/password de MySQL
+mysql -u root -p < db/schema.sql     # crea la base `ZeroScam` (borra lo que haya)
 npm run start:dev                     # http://localhost:3000
 ```
 
@@ -25,11 +26,11 @@ npm run start:dev                     # http://localhost:3000
 
 | Variable / valor | Dónde está hoy                      | Descripción                                |
 |------------------|-------------------------------------|--------------------------------------------|
-| `DATABASE_URL`   | `src/database/database.module.ts`   | Cadena de conexión a MySQL                 |
+| `DATABASE_URL`   | `.env` (ver `.env.example`)         | Cadena de conexión a MySQL (base `ZeroScam`) |
 | `SECRET`         | `src/auth/jwt.ts`                   | Llave HMAC con la que se firman los tokens |
 
-Ambos están escritos en el código. Sacarlos a variables de entorno es parte
-de una sesión posterior.
+`DATABASE_URL` va en `.env`, que no se sube a git: cada quien pone la de su
+MySQL. `SECRET` sigue escrito en el código.
 
 ## Endpoints
 
@@ -41,14 +42,11 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | Método | Ruta              | Auth   | Qué hace                                                 |
 |--------|-------------------|--------|----------------------------------------------------------|
 | GET    | `/`               | no     | Comprueba que el servidor responde (`Hello World!`)      |
-| POST   | `/auth/register`  | no     | Crea un usuario (`email`, `password` ≥ 8)                |
+| POST   | `/auth/register`  | no     | Crea un usuario (`name`, `lastName`, `country`, `email`, `password` ≥ 8 con un carácter especial) |
 | POST   | `/auth/login`     | no     | Regresa `accessToken` (15 min) y `refreshToken` (7 días) |
 | POST   | `/auth/refresh`   | no     | Access token nuevo a partir del refresh                  |
-| GET    | `/contacts`       | Bearer | Lista los contactos del usuario del token                |
-| POST   | `/contacts`       | Bearer | Crea un contacto con el usuario del token como dueño     |
-| GET    | `/contacts/:id`   | Bearer | Un contacto                                              |
-| PATCH  | `/contacts/:id`   | Bearer | Edita campos parciales                                   |
-| DELETE | `/contacts/:id`   | Bearer | Borra (204)                                              |
+| POST   | `/reports`        | Bearer | Crea un reporte (`fraudTypeId`, `description`, `incidentDate`, `urls` ≥ 1). Solo rol Usuario |
+| POST   | `/reports/:id/evidence` | Bearer | Sube un archivo de evidencia (campo `file`) a un reporte propio |
 
 Las rutas con **Bearer** requieren `Authorization: Bearer <accessToken>`.
 Sin él responden 401.
@@ -62,8 +60,9 @@ src/
 ├── common/              DTOs de respuestas de error (para Swagger)
 ├── database/            pool de MySQL (mysql2)
 ├── auth/                registro, login, refresh, guard y JWT a mano
-└── contacts/            controller → service → repository de contactos
-db/schema.sql            tablas users y contacts
+├── reports/             controller → service → repository de reportes
+└── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)
+db/schema.sql            modelo físico de ZeroScam + catálogos (Rol, Estado, TipoFraude)
 ```
 
 ## Flujo de trabajo

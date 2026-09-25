@@ -3,11 +3,14 @@ import { ApiProperty } from '@nestjs/swagger';
 // Solo documentan en Swagger lo que regresa AuthService.
 
 export class RegisterResponseDto {
-  @ApiProperty({ example: '3f2b9c1e-8d4a-4e6f-9b7c-1a2d3e4f5a6b' })
+  @ApiProperty({ example: '1', description: 'id_usuario' })
   id: string;
 
   @ApiProperty({ example: 'dana@example.com' })
   email: string;
+
+  @ApiProperty({ example: 'Usuario creado con éxito' })
+  message: string;
 }
 
 export class LoginResponseDto {

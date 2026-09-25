@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -23,18 +24,33 @@ export class AuthService {
   /**
    * Registra un usuario nuevo guardando el hash de su password.
    *
-   * @param dto - Email y password ya validados.
-   * @returns El `id` y `email` del usuario creado. Nunca el password.
+   * @param dto - Nombre, apellido, país, email y password ya validados.
+   * @returns El `id` y `email` del usuario creado y el mensaje de
+   * confirmación (CU01). Nunca el password.
    * @throws {@link ConflictException} si el email ya está registrado.
    */
-  async register(dto: RegisterDto): Promise<{ id: string; email: string }> {
-    // La columna `email` es UNIQUE, así que un duplicado haría fallar el
+  async register(
+    dto: RegisterDto,
+  ): Promise<{ id: string; email: string; message: string }> {
+    // La columna `correo_electronico` es UNIQUE, así que un duplicado haría fallar el
     // INSERT con un error de MySQL (500). Revisamos antes para dar un 409.
     if (await this.users.findByEmail(dto.email!)) {
       throw new ConflictException('El email ya está registrado');
     }
-    const user = await this.users.save(dto.email!, hash(dto.password!));
-    return { id: user.id!, email: user.email! };
+    const user = await this.users.save(
+      {
+        email: dto.email,
+        name: dto.name,
+        lastName: dto.lastName,
+        country: dto.country,
+      },
+      hash(dto.password!),
+    );
+    return {
+      id: user.id!,
+      email: user.email!,
+      message: 'Usuario creado con éxito',
+    };
   }
 
   /**
@@ -44,6 +60,7 @@ export class AuthService {
    * @returns Un `accessToken` de 15 minutos y un `refreshToken` de 7 días.
    * @throws {@link UnauthorizedException} si el usuario no existe o el
    * password no coincide.
+   * @throws {@link ForbiddenException} si la cuenta está suspendida (RF03).
    */
   async login(
     dto: LoginDto,
@@ -57,10 +74,15 @@ export class AuthService {
     if (user.passwordHash !== hash(dto.password!)) {
       throw new UnauthorizedException('Password incorrecto');
     }
+    // Un administrador puede desactivar cuentas (RF03): esas ya no entran.
+    if (user.accountStatus !== 'ACTIVO') {
+      throw new ForbiddenException('La cuenta está suspendida');
+    }
     // Dos tokens con los mismos datos y distinta vida: el access viaja en cada
     // request, así que dura poco por si se filtra; el refresh solo va a
     // /auth/refresh y dura más para no pedir el password cada 15 minutos.
-    const claims = { sub: user.id!, email: user.email! };
+    // El rol viaja en el token para el control de acceso por roles (RNF04).
+    const claims = { sub: user.id!, email: user.email!, role: user.role! };
     const accessToken = sign({ ...claims, type: 'access' }, ACCESS_TTL);
     const refreshToken = sign({ ...claims, type: 'refresh' }, REFRESH_TTL);
     console.log('Login de ' + user.email + ': ' + accessToken);
@@ -85,7 +107,12 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token inválido');
     }
     const accessToken = sign(
-      { sub: payload.sub, email: payload.email, type: 'access' },
+      {
+        sub: payload.sub,
+        email: payload.email,
+        role: payload.role,
+        type: 'access',
+      },
       ACCESS_TTL,
     );
     return { accessToken };
@@ -96,8 +123,8 @@ export class AuthService {
  * Hashea un password con SHA-256.
  *
  * @param password - Password en texto plano.
- * @returns El hash en hexadecimal: 64 caracteres, lo que mide la columna
- * `password_hash` (CHAR(64)).
+ * @returns El hash en hexadecimal: 64 caracteres; cabe en la columna
+ * `contrasena_hash` (VARCHAR(255)).
  */
 function hash(password: string): string {
   return createHash('sha256').update(password).digest('hex');

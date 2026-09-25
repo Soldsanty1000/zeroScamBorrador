@@ -15,6 +15,8 @@ const SECRET = 'agenda-secret-2026';
 export interface JwtPayload {
   sub: string;
   email: string;
+  /** `nombre_rol`: Usuario, Administrador, Policia u Owner (RNF04). */
+  role: string;
   /** Un access token no sirve para refrescar, ni un refresh para pedir recursos. */
   type: 'access' | 'refresh';
   /** Emitido en (segundos Unix). */

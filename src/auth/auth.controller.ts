@@ -3,6 +3,7 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -60,6 +61,10 @@ export class AuthController {
   })
   @ApiUnauthorizedResponse({
     description: 'El usuario no existe o el password es incorrecto',
+    type: ErrorResponseDto,
+  })
+  @ApiForbiddenResponse({
+    description: 'La cuenta está suspendida',
     type: ErrorResponseDto,
   })
   login(@Body() dto: LoginDto) {
