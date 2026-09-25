@@ -8,7 +8,7 @@ import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
 import { Contact } from './entities/contact.entity';
 
-const COLUMNS = 'id, owner_id, name, email, phone, notes, created_at';
+const COLUMNS = 'id, owner_id, name, email, phone, notes, photo, created_at';
 
 /**
  * Acceso a la tabla `contacts` de MySQL.
@@ -110,6 +110,20 @@ export class ContactsRepository {
   }
 
   /**
+   * Guarda el nombre del archivo de foto de un contacto.
+   *
+   * @param id - UUID del contacto.
+   * @param filename - Nombre del archivo dentro de `uploads/`.
+   * @returns El contacto después del cambio, o `undefined` si no existe.
+   */
+  async setPhoto(id: string, filename: string): Promise<Contact | undefined> {
+    await this.pool.query(
+      `UPDATE contacts SET photo = '${filename}' WHERE id = '${id}'`,
+    );
+    return this.findById(id);
+  }
+
+  /**
    * Borra un contacto.
    *
    * @param id - UUID del contacto.
@@ -139,6 +153,7 @@ function toEntity(row: any): Contact {
   // MySQL regresa NULL cuando no hay notas. Lo pasamos a `undefined` para que
   // JSON.stringify omita el campo en la respuesta en vez de mandar `null`.
   contact.notes = row.notes ?? undefined;
+  contact.photo = row.photo ?? undefined;
   contact.createdAt = row.created_at;
   return contact;
 }

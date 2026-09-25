@@ -5,5 +5,7 @@ export class Contact {
   email: string | undefined;
   phone: string | undefined;
   notes?: string | undefined;
+  /** Nombre del archivo dentro de uploads/; undefined si no tiene foto. */
+  photo?: string | undefined;
   createdAt: Date | undefined;
 }

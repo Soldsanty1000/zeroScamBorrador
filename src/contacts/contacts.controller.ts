@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,11 +8,16 @@ import {
   Param,
   Patch,
   Post,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiCreatedResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
@@ -21,6 +27,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { diskStorage } from 'multer';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt';
@@ -113,6 +120,42 @@ export class ContactsController {
     @Body() dto: UpdateContactDto,
   ): Promise<ContactResponseDto> {
     return this.service.update(id, dto);
+  }
+
+  @Post(':id/photo')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: diskStorage({
+        destination: 'uploads',
+        filename: (_req, file, cb) => cb(null, file.originalname),
+      }),
+    }),
+  )
+  @ApiOperation({ summary: 'Subir o reemplazar la foto de un contacto' })
+  @ApiParam(ID_PARAM)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { photo: { type: 'string', format: 'binary' } },
+      required: ['photo'],
+    },
+  })
+  @ApiCreatedResponse({ type: ContactResponseDto })
+  @ApiBadRequestResponse({
+    description: 'No vino ningún archivo',
+    type: ErrorResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'Contacto no encontrado',
+    type: ErrorResponseDto,
+  })
+  uploadPhoto(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<ContactResponseDto> {
+    if (!file) throw new BadRequestException('Falta el campo photo');
+    return this.service.setPhoto(id, file);
   }
 
   @Delete(':id')

@@ -17,6 +17,12 @@ export class ContactResponseDto {
   @ApiPropertyOptional({ example: 'compañera de clase' })
   notes?: string;
 
+  @ApiPropertyOptional({
+    example: '/uploads/ana.png',
+    description: 'Ruta de la foto, relativa al servidor; no viene si no tiene',
+  })
+  photoUrl?: string;
+
   @ApiProperty({
     format: 'date-time',
     description: 'ISO 8601',
@@ -31,6 +37,7 @@ export class ContactResponseDto {
     dto.email = contact.email!;
     dto.phone = contact.phone!;
     dto.notes = contact.notes;
+    dto.photoUrl = contact.photo ? '/uploads/' + contact.photo : undefined;
     dto.createdAt = contact.createdAt!.toISOString();
     return dto;
   }

@@ -85,6 +85,27 @@ export class ContactsService {
   }
 
   /**
+   * Asocia al contacto un archivo que Multer ya dejó en `uploads/`.
+   *
+   * Solo se guarda el nombre del archivo; el archivo vive en disco y lo
+   * sirve Express como estático en `/uploads/<nombre>`.
+   * @param id - UUID del contacto.
+   * @param file - Archivo recibido; `file.filename` es el nombre en disco.
+   * @throws {@link NotFoundException} si no hay contacto con ese id.
+   */
+  async setPhoto(
+    id: string,
+    file: Express.Multer.File,
+  ): Promise<ContactResponseDto> {
+    const contact = await this.repository.findById(id);
+    if (!contact) {
+      throw new NotFoundException('Contacto ' + id + ' no encontrado');
+    }
+    const updated = (await this.repository.setPhoto(id, file.filename))!;
+    return ContactResponseDto.fromEntity(updated);
+  }
+
+  /**
    * Borra un contacto. Es definitivo: no hay papelera.
    *
    * @param id - UUID del contacto.

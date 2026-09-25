@@ -1,11 +1,18 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { networkInterfaces } from 'node:os';
+import { join } from 'node:path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+
+  // Las fotos viven en uploads/ (fuera de src/). Express las sirve tal cual:
+  // GET /uploads/<archivo> regresa el archivo con su Content-Type.
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
 
   // Documentación OpenAPI. Se genera a partir de los decoradores de los
   // controllers y DTOs: Swagger UI en /docs, el documento crudo en /docs-json.
@@ -27,6 +34,18 @@ async function bootstrap() {
     swaggerOptions: { persistAuthorization: true },
   });
 
-  await app.listen(3000);
+  // 0.0.0.0 = todas las interfaces de red, no solo localhost: así otra
+  // máquina de la misma red puede abrir http://<tu-ip>:3000/uploads/...
+  await app.listen(3000, '0.0.0.0');
+  console.log('API en http://localhost:3000 y en ' + lanUrls().join(', '));
 }
+
+/** URLs por las que se llega a este servidor desde la red local. */
+function lanUrls(): string[] {
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((i) => i && i.family === 'IPv4' && !i.internal)
+    .map((i) => 'http://' + i!.address + ':3000');
+}
+
 bootstrap();
