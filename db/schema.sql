@@ -137,3 +137,10 @@ INSERT INTO TipoFraude (nombre_tipo, descripcion) VALUES
 ('Fraude de Inversión / Cripto', 'Esquemas Ponzi o falsas promesas de altos rendimientos financieros.'),
 ('Ransomware / Extorsión', 'Secuestro de datos o amenazas cibernéticas a cambio de dinero.'),
 ('Fraude Telefónico (Vishing)', 'Llamadas fraudulentas simulando ser bancos o instituciones oficiales.');
+
+-- Cuentas de arranque para probar cada rol. Password de las tres: ZeroScam123!
+-- (hash SHA-256 en hex, igual que AuthService). Cámbienlas fuera de desarrollo.
+INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash) VALUES
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Owner'), 'Owner', 'ZeroScam', 'México', 'owner@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Administrador'), 'Admin', 'ZeroScam', 'México', 'admin@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Policia'), 'Policía', 'Cibernética', 'México', 'policia@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21');

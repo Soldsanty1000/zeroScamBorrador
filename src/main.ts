@@ -25,7 +25,12 @@ async function bootstrap() {
     )
     .setVersion('1.0')
     .addTag('auth', 'Registro, login y renovación de tokens')
+    .addTag('users', 'Perfil y gestión de cuentas (RF03)')
     .addTag('reports', 'Reportes de fraude. Requiere Bearer token')
+    .addTag('notifications', 'Bandeja de notificaciones del usuario')
+    .addTag('risk', 'Consulta de riesgo de URLs')
+    .addTag('stats', 'Estadísticas para Administrador, Owner y Policía')
+    .addTag('catalogs', 'Catálogos para llenar selectores de la app')
     .addTag('app', 'Salud del servidor')
     .addBearerAuth()
     .build();

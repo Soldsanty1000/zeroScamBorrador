@@ -50,6 +50,88 @@ export class UsersRepository {
     // Releemos para traer el `id_usuario` y `fecha_registro` que asignó MySQL.
     return (await this.findByEmail(user.email!))!;
   }
+
+  /**
+   * Busca un usuario por id.
+   *
+   * @param id - `id_usuario`.
+   * @returns El usuario, o `undefined` si no existe.
+   */
+  async findById(id: string): Promise<User | undefined> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
+       WHERE u.id_usuario = '${id}'`,
+    );
+    return rows[0] && toEntity(rows[0]);
+  }
+
+  /**
+   * Lista usuarios, opcionalmente filtrados (RF03).
+   *
+   * @param filters - Rol, estado de cuenta y texto a buscar en nombre,
+   * apellido o email; los que no vengan no filtran.
+   * @returns Los usuarios ordenados por fecha de registro.
+   */
+  async findAll(filters: {
+    role?: string;
+    accountStatus?: string;
+    q?: string;
+  }): Promise<User[]> {
+    const where = ['1 = 1'];
+    if (filters.role) where.push(`r.nombre_rol = '${filters.role}'`);
+    if (filters.accountStatus) {
+      where.push(`u.estado_cuenta = '${filters.accountStatus}'`);
+    }
+    if (filters.q) {
+      where.push(
+        `(u.nombre LIKE '%${filters.q}%' OR u.apellido LIKE '%${filters.q}%' ` +
+          `OR u.correo_electronico LIKE '%${filters.q}%')`,
+      );
+    }
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
+       WHERE ${where.join(' AND ')} ORDER BY u.fecha_registro`,
+    );
+    return rows.map(toEntity);
+  }
+
+  /**
+   * Actualiza solo los campos presentes en `changes`.
+   *
+   * @param id - `id_usuario`.
+   * @param changes - Campos a modificar; los ausentes no se tocan.
+   * @returns El usuario después del cambio, o `undefined` si no existe.
+   */
+  async update(
+    id: string,
+    changes: Partial<
+      Pick<User, 'name' | 'lastName' | 'country' | 'accountStatus' | 'role'>
+    >,
+  ): Promise<User | undefined> {
+    // Los campos del DTO no se llaman como las columnas, así que el SET se
+    // arma con este mapa.
+    const columns: Record<string, string> = {
+      name: 'nombre',
+      lastName: 'apellido',
+      country: 'pais',
+      accountStatus: 'estado_cuenta',
+    };
+    const sets = Object.entries(changes)
+      .filter(([field, value]) => columns[field] && value !== undefined)
+      .map(([field, value]) => `${columns[field]} = '${value}'`);
+    if (changes.role) {
+      sets.push(
+        `id_rol = (SELECT id_rol FROM Rol WHERE nombre_rol = '${changes.role}')`,
+      );
+    }
+    // Sin cambios no hay UPDATE: MySQL rechaza un SET vacío.
+    if (sets.length > 0) {
+      await this.pool.query(
+        `UPDATE Usuario SET ${sets.join(', ')} WHERE id_usuario = '${id}'`,
+      );
+    }
+    return this.findById(id);
+  }
 }
 
 /**

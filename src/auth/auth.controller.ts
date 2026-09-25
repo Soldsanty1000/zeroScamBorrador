@@ -1,9 +1,11 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -13,6 +15,7 @@ import {
   ErrorResponseDto,
   ValidationErrorResponseDto,
 } from '../common/dto/error-response.dto';
+import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import {
   LoginResponseDto,
@@ -91,4 +94,22 @@ export class AuthController {
   refresh(@Body() dto: RefreshDto) {
     return this.service.refresh(dto);
   }
+
+  @Post('logout')
+  @HttpCode(204)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Cerrar sesión (CU03, CU10, CU15)',
+    description:
+      'Los tokens no se guardan en el servidor, así que cerrar sesión es ' +
+      'responsabilidad de la app: al recibir 204 borra el accessToken y el ' +
+      'refreshToken que tenga guardados.',
+  })
+  @ApiNoContentResponse({ description: 'Sesión cerrada, sin cuerpo' })
+  @ApiUnauthorizedResponse({
+    description: 'Falta el token, o es inválido o expiró',
+    type: ErrorResponseDto,
+  })
+  logout(): void {}
 }
