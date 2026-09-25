@@ -4,9 +4,7 @@ API REST de una agenda personal hecha con NestJS y MySQL. Cada usuario se
 registra, entra con email y password, y administra sus contactos con un
 token JWT.
 
-Proyecto del curso **Seguridad informática** (TC2007B, Ago–Dic 2026). Se
-construye por sesiones; cada sesión es una rama `sesion-NN-tema` que se
-integra a `main` por pull request.
+Proyecto del curso **Seguridad informática** (TC2007B, Ago–Dic 2026).
 
 ## Requisitos
 
@@ -63,12 +61,4 @@ src/
 ├── reports/             controller → service → repository de reportes
 └── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)
 db/schema.sql            modelo físico de ZeroScam + catálogos (Rol, Estado, TipoFraude)
-```
-
-## Flujo de trabajo
-
-```bash
-git switch -c sesion-NN-tema      # una rama por sesión
-git commit -m "tipo: qué cambió y por qué"
-git push -u origin sesion-NN-tema # y abrir pull request a main
 ```
