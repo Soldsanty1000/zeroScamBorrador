@@ -9,7 +9,7 @@ import type { Target } from '../target';
 import { CheckResult } from './check-result';
 
 /** Lo que se espera a que el sitio conteste, en milisegundos. */
-const TIMEOUT = 3000;
+const TIMEOUT = 2000;
 
 const DAY = 24 * 60 * 60 * 1000;
 

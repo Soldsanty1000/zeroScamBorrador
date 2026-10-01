@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
 import { checkCertificate } from './checks/certificate.check';
 import { CheckResult } from './checks/check-result';
+import { checkCommunity } from './checks/community.check';
+import { checkDomainAge } from './checks/domain-age.check';
 import { checkHeuristics } from './checks/heuristics.check';
 import { AnalyzeResponseDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
@@ -64,10 +66,23 @@ export class RiskService {
    */
   async analyze(url: string): Promise<AnalyzeResponseDto> {
     const target = await resolveTarget(url);
-    // Faltan: antigüedad del dominio, listas negras y reportes de la
-    // comunidad.
-    const certificate = await checkCertificate(target);
-    const results: CheckResult[] = [checkHeuristics(target), certificate];
+    // Las verificaciones no dependen entre sí: van en paralelo para que la
+    // respuesta tarde lo que la más lenta, no la suma (RNF01). Ninguna lanza
+    // error si el sitio o un servicio externo no contesta. Falta: listas
+    // negras.
+    const [certificate, domainAge, reports] = await Promise.all([
+      checkCertificate(target),
+      checkDomainAge(target),
+      // Por host y no por URL completa: cuentan los reportes de cualquier
+      // página del mismo sitio.
+      this.repository.findValidatedReports(target.hostname),
+    ]);
+    const results: CheckResult[] = [
+      checkHeuristics(target),
+      certificate,
+      domainAge,
+      checkCommunity(reports),
+    ];
     const score = Math.min(
       100,
       results.reduce((sum, r) => sum + r.points, 0),

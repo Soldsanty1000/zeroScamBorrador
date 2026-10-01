@@ -15,6 +15,9 @@ import { BlockList, isIP } from 'node:net';
 /** Puertos a los que el análisis se puede conectar. */
 const ALLOWED_PORTS = [80, 443];
 
+/** Lo que se espera a que el DNS conteste, en milisegundos. */
+const DNS_TIMEOUT = 2000;
+
 /** Rangos que no son de internet: loopback, redes privadas, link-local, etc. */
 const PRIVATE = new BlockList();
 PRIVATE.addSubnet('0.0.0.0', 8);
@@ -100,13 +103,21 @@ export async function resolveTarget(raw: string): Promise<Target> {
 }
 
 /**
- * Direcciones a las que resuelve un host; vacío si el dominio no existe.
- * Si el host ya es una IP, regresa esa misma.
+ * Direcciones a las que resuelve un host; vacío si el dominio no existe o
+ * el DNS tarda más de {@link DNS_TIMEOUT}. Si el host ya es una IP, regresa
+ * esa misma.
  */
 async function resolve(hostname: string): Promise<string[]> {
   if (isIP(hostname)) return [hostname];
   try {
-    const found = await lookup(hostname, { all: true });
+    // `lookup` no se puede cancelar: si el DNS se cuelga (suele reintentar
+    // a los 5 s) dejamos de esperarlo para no pasarnos del tiempo de RNF01.
+    const found = await Promise.race([
+      lookup(hostname, { all: true }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), DNS_TIMEOUT).unref(),
+      ),
+    ]);
     // Algunos DNS (routers, bloqueadores de anuncios) contestan 0.0.0.0 en
     // vez de "no existe": cuenta como que el dominio no resuelve.
     return found
