@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
-import { AnalyzeResponseDto, RiskCheckDto } from './dto/analyze-response.dto';
+import { checkCertificate } from './checks/certificate.check';
+import { CheckResult } from './checks/check-result';
+import { checkHeuristics } from './checks/heuristics.check';
+import { AnalyzeResponseDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
 import { RiskRepository } from './risk.repository';
 import { resolveTarget } from './target';
@@ -61,17 +64,36 @@ export class RiskService {
    */
   async analyze(url: string): Promise<AnalyzeResponseDto> {
     const target = await resolveTarget(url);
-    // Las verificaciones (certificado, antigüedad del dominio, listas negras,
-    // heurísticas y reportes) todavía no existen: por ahora no hay señales.
-    const checks: RiskCheckDto[] = [];
+    // Faltan: antigüedad del dominio, listas negras y reportes de la
+    // comunidad.
+    const certificate = await checkCertificate(target);
+    const results: CheckResult[] = [checkHeuristics(target), certificate];
+    const score = Math.min(
+      100,
+      results.reduce((sum, r) => sum + r.points, 0),
+    );
     return {
       url: target.url,
       hostname: target.hostname,
-      riskLevel: RISK_LEVELS[0],
-      score: 0,
-      checks,
-      certificateStatus: target.address ? undefined : 'INACCESIBLE',
+      riskLevel: levelFor(score),
+      score,
+      checks: results.map(({ name, passed, detail }) => ({
+        name,
+        passed,
+        detail,
+      })),
+      certificateStatus: certificate.status,
       evaluatedAt: new Date().toISOString(),
     };
   }
+}
+
+/**
+ * Convierte los puntos de riesgo en un nivel: cada 25 puntos sube uno.
+ *
+ * @param score - Puntos de 0 a 100.
+ * @returns BAJO (0–24), MEDIO (25–49), ALTO (50–74) o MUY_ALTO (75–100).
+ */
+function levelFor(score: number): string {
+  return RISK_LEVELS[Math.min(Math.floor(score / 25), RISK_LEVELS.length - 1)];
 }
