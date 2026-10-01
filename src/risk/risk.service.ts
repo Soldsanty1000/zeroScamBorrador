@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
+import { AnalyzeResponseDto, RiskCheckDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
 import { RiskRepository } from './risk.repository';
+import { resolveTarget } from './target';
 
 /**
  * Verificación de URLs contra la base de reportes validados (CU08, CU13,
@@ -44,6 +46,32 @@ export class RiskService {
       })),
       sites,
       reports,
+    };
+  }
+
+  /**
+   * Analiza una URL (RF07): la normaliza, corre las verificaciones y regresa
+   * el nivel de riesgo.
+   *
+   * @param url - URL a analizar, ya validada por `AnalyzeUrlDto`.
+   * @returns El resultado del análisis. Si el dominio no resuelve,
+   * `certificateStatus` es INACCESIBLE.
+   * @throws {@link BadRequestException} si la URL usa un puerto distinto de
+   * 80/443 o apunta a una dirección interna.
+   */
+  async analyze(url: string): Promise<AnalyzeResponseDto> {
+    const target = await resolveTarget(url);
+    // Las verificaciones (certificado, antigüedad del dominio, listas negras,
+    // heurísticas y reportes) todavía no existen: por ahora no hay señales.
+    const checks: RiskCheckDto[] = [];
+    return {
+      url: target.url,
+      hostname: target.hostname,
+      riskLevel: RISK_LEVELS[0],
+      score: 0,
+      checks,
+      certificateStatus: target.address ? undefined : 'INACCESIBLE',
+      evaluatedAt: new Date().toISOString(),
     };
   }
 }

@@ -1,4 +1,12 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -12,6 +20,8 @@ import {
   ErrorResponseDto,
   ValidationErrorResponseDto,
 } from '../common/dto/error-response.dto';
+import { AnalyzeResponseDto } from './dto/analyze-response.dto';
+import { AnalyzeUrlDto } from './dto/analyze-url.dto';
 import { RiskQueryDto } from './dto/risk-query.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
 import { RiskService } from './risk.service';
@@ -43,5 +53,25 @@ export class RiskController {
   })
   check(@Query() query: RiskQueryDto): Promise<RiskResponseDto> {
     return this.service.check(query.q);
+  }
+
+  @Post('analyze')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Analizar una URL (RF07)',
+    description:
+      'Cualquier rol. Normaliza la URL, corre las verificaciones y regresa ' +
+      'el nivel de riesgo con el detalle de cada una. Un sitio que no ' +
+      'responde no es un error: regresa 200 con la advertencia.',
+  })
+  @ApiOkResponse({ type: AnalyzeResponseDto })
+  @ApiBadRequestResponse({
+    description:
+      'URL inválida, con un puerto distinto de 80/443 o que apunta a una ' +
+      'dirección interna',
+    type: ValidationErrorResponseDto,
+  })
+  analyze(@Body() dto: AnalyzeUrlDto): Promise<AnalyzeResponseDto> {
+    return this.service.analyze(dto.url);
   }
 }
