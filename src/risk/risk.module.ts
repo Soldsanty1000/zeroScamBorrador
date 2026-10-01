@@ -9,5 +9,7 @@ import { RiskService } from './risk.service';
   imports: [DatabaseModule, AuthModule],
   controllers: [RiskController],
   providers: [RiskService, RiskRepository],
+  // ReportsModule lo usa para recalcular el riesgo de las URLs de un reporte.
+  exports: [RiskService],
 })
 export class RiskModule {}

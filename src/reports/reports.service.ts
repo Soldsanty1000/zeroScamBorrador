@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { JwtPayload } from '../auth/jwt';
 import { UsersRepository } from '../auth/users.repository';
 import { POLICE_VISIBLE_STATUSES, ROLES } from '../common/constants';
+import { RiskService } from '../risk/risk.service';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateReportDto } from './dto/create-report.dto';
 import { ReportFiltersDto } from './dto/report-filters.dto';
@@ -38,6 +39,7 @@ export class ReportsService {
   constructor(
     private readonly repository: ReportsRepository,
     private readonly users: UsersRepository,
+    private readonly risk: RiskService,
   ) {}
 
   /**
@@ -173,7 +175,8 @@ export class ReportsService {
 
   /**
    * Cambia el estado de un reporte: aceptar (VALIDADO, CU19), rechazar
-   * (RECHAZADO, CU20), pasar a revisión o canalizar. Administrador u Owner.
+   * (RECHAZADO, CU20), pasar a revisión o canalizar, y recalcula el riesgo
+   * de sus URLs. Administrador u Owner.
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
@@ -208,6 +211,9 @@ export class ReportsService {
       data.status,
       data.observations,
     );
+    // Validar, rechazar o canalizar cambia qué reportes cuentan para el
+    // riesgo de sus URLs.
+    await this.risk.refreshUrls(updated.urls!);
     return ReportResponseDto.fromEntity(
       updated,
       'Estado actualizado a ' + data.status,
@@ -215,7 +221,8 @@ export class ReportsService {
   }
 
   /**
-   * Clasifica la gravedad de un reporte (CU18). Administrador u Owner.
+   * Clasifica la gravedad de un reporte (CU18) y recalcula el riesgo de sus
+   * URLs. Administrador u Owner.
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
@@ -229,6 +236,7 @@ export class ReportsService {
   ): Promise<ReportResponseDto> {
     await this.findVisible(user, id);
     const updated = await this.repository.setRisk(id, user.sub, riskLevel);
+    await this.risk.refreshUrls(updated.urls!);
     return ReportResponseDto.fromEntity(
       updated,
       'Nivel de riesgo asignado: ' + riskLevel,

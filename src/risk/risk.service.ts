@@ -5,10 +5,14 @@ import { CheckResult } from './checks/check-result';
 import { checkCommunity } from './checks/community.check';
 import { checkDomainAge } from './checks/domain-age.check';
 import { checkHeuristics } from './checks/heuristics.check';
-import { AnalyzeResponseDto } from './dto/analyze-response.dto';
+import { AnalyzeResponseDto, RiskCheckDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
 import { RiskRepository } from './risk.repository';
-import { resolveTarget } from './target';
+import { evaluate } from './scoring';
+import { hostnameOf, normalizeUrl, resolveTarget } from './target';
+
+/** Horas que un análisis guardado se regresa sin repetirlo. */
+const CACHE_HOURS = 24;
 
 /**
  * Verificación de URLs contra la base de reportes validados (CU08, CU13,
@@ -55,8 +59,11 @@ export class RiskService {
   }
 
   /**
-   * Analiza una URL (RF07): la normaliza, corre las verificaciones y regresa
-   * el nivel de riesgo.
+   * Analiza una URL (RF07): la normaliza, corre las verificaciones, guarda
+   * el resultado en `SitioWeb_URL` y regresa el nivel de riesgo.
+   *
+   * Si la misma URL se analizó hace menos de {@link CACHE_HOURS} horas
+   * regresa lo guardado (`cached: true`) sin conectarse a nada.
    *
    * @param url - URL a analizar, ya validada por `AnalyzeUrlDto`.
    * @returns El resultado del análisis. Si el dominio no resuelve,
@@ -65,6 +72,28 @@ export class RiskService {
    * 80/443 o apunta a una dirección interna.
    */
   async analyze(url: string): Promise<AnalyzeResponseDto> {
+    // La llave del caché es la URL completa ya normalizada. Se busca antes
+    // de resolver el DNS, que es lo primero que tarda.
+    const normalized = normalizeUrl(url);
+    const stored = await this.repository.findEvaluation(
+      normalized.url,
+      CACHE_HOURS,
+    );
+    if (stored?.evaluation) {
+      return {
+        url: normalized.url,
+        hostname: normalized.hostname,
+        // El nivel se lee de la columna y no del detalle: es el que ven las
+        // demás consultas (`GET /risk`).
+        riskLevel: stored.riskLevel,
+        score: stored.evaluation.score,
+        checks: toCheckDtos(stored.evaluation.checks),
+        certificateStatus: stored.certificateStatus,
+        evaluatedAt: stored.evaluatedAt!.toISOString(),
+        cached: true,
+      };
+    }
+
     const target = await resolveTarget(url);
     // Las verificaciones no dependen entre sí: van en paralelo para que la
     // respuesta tarde lo que la más lenta, no la suma (RNF01). Ninguna lanza
@@ -75,40 +104,72 @@ export class RiskService {
       checkDomainAge(target),
       // Por host y no por URL completa: cuentan los reportes de cualquier
       // página del mismo sitio.
-      this.repository.findValidatedReports(target.hostname),
+      this.repository.findValidatedReportsByHost(target.hostname),
     ]);
-    const results: CheckResult[] = [
+    const evaluation = evaluate([
       checkHeuristics(target),
       certificate,
       domainAge,
       checkCommunity(reports),
-    ];
-    const score = Math.min(
-      100,
-      results.reduce((sum, r) => sum + r.points, 0),
+    ]);
+    await this.repository.saveEvaluation(
+      target.url,
+      certificate.status,
+      evaluation,
     );
     return {
       url: target.url,
       hostname: target.hostname,
-      riskLevel: levelFor(score),
-      score,
-      checks: results.map(({ name, passed, detail }) => ({
-        name,
-        passed,
-        detail,
-      })),
+      riskLevel: evaluation.riskLevel,
+      score: evaluation.score,
+      checks: toCheckDtos(evaluation.checks),
       certificateStatus: certificate.status,
       evaluatedAt: new Date().toISOString(),
+      cached: false,
     };
+  }
+
+  /**
+   * Recalcula el nivel de riesgo de los sitios de unas URLs cuando cambian
+   * sus reportes: la administración validó, rechazó, canalizó o clasificó
+   * uno (regla "Evaluación global de riesgo").
+   *
+   * No vuelve a conectarse a los sitios: toma las verificaciones guardadas
+   * de cada URL, cambia solo la de reportes de la comunidad y vuelve a
+   * puntuar con {@link evaluate}, igual que {@link analyze}. Así un reporte
+   * nuevo nunca borra lo que el análisis ya había encontrado.
+   *
+   * @param urls - URLs del reporte que cambió (`Report.urls`).
+   */
+  async refreshUrls(urls: string[]): Promise<void> {
+    // Set: varias URLs del reporte pueden ser del mismo sitio.
+    const hostnames = new Set(
+      urls.map(hostnameOf).filter((h): h is string => Boolean(h)),
+    );
+    for (const hostname of hostnames) {
+      const [reports, sites] = await Promise.all([
+        this.repository.findValidatedReportsByHost(hostname),
+        this.repository.findEvaluationsByHost(hostname),
+      ]);
+      const community = checkCommunity(reports);
+      // Todas las URLs del sitio, no solo las del reporte: el análisis de
+      // cualquiera de ellas cuenta los reportes del sitio completo.
+      for (const site of sites) {
+        // Una URL que nunca se analizó no tiene verificaciones guardadas:
+        // su nivel sale solo de los reportes.
+        const others = (site.evaluation?.checks ?? []).filter(
+          (c) => c.name !== community.name,
+        );
+        await this.repository.saveRisk(
+          site.url,
+          evaluate([...others, community]),
+        );
+      }
+    }
   }
 }
 
-/**
- * Convierte los puntos de riesgo en un nivel: cada 25 puntos sube uno.
- *
- * @param score - Puntos de 0 a 100.
- * @returns BAJO (0–24), MEDIO (25–49), ALTO (50–74) o MUY_ALTO (75–100).
- */
-function levelFor(score: number): string {
-  return RISK_LEVELS[Math.min(Math.floor(score / 25), RISK_LEVELS.length - 1)];
+/** Deja de cada verificación solo lo que se muestra al usuario. */
+function toCheckDtos(checks: CheckResult[]): RiskCheckDto[] {
+  return checks.map(({ name, passed, detail }) => ({ name, passed, detail }));
 }

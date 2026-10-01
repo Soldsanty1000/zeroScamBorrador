@@ -8,4 +8,10 @@ export interface CheckResult {
   detail: string;
   /** Puntos de riesgo que aporta al total (0 a 100); 0 si no encontró nada. */
   points: number;
+  /**
+   * Nivel del que la URL no puede bajar, sumen lo que sumen los puntos. Lo
+   * usa `communityReports`: si la administración ya clasificó un reporte
+   * como ALTO, la URL es al menos ALTO.
+   */
+  minLevel?: string;
 }

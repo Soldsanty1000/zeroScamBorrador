@@ -229,8 +229,11 @@ export class ReportsRepository {
 
   /**
    * Cambia el estado de un reporte (CU19, CU20): lo registra en
-   * `Historial_Estado`, avisa al denunciante y recalcula el riesgo de sus
-   * URLs.
+   * `Historial_Estado` y avisa al denunciante.
+   *
+   * @remarks
+   * El riesgo de sus URLs no se recalcula aquí: lo hace
+   * `RiskService.refreshUrls`, que `ReportsService` llama después.
    *
    * @param id - `id_reporte`.
    * @param adminId - `id_usuario` del administrador que hace el cambio.
@@ -265,15 +268,13 @@ export class ReportsRepository {
         `INSERT INTO Notificacion_Alerta (id_usuario, id_reporte, mensaje)
          SELECT id_usuario, id_reporte, '${message}' FROM Reporte WHERE id_reporte = ${id}`,
       );
-      await refreshUrlRisk(conn, id);
     });
     return (await this.findById(id))!;
   }
 
   /**
-   * Asigna el nivel de riesgo de un reporte (CU18). Deja constancia en
-   * `Historial_Estado` (sin cambiar el estado) y recalcula el riesgo de sus
-   * URLs.
+   * Asigna el nivel de riesgo de un reporte (CU18) y deja constancia en
+   * `Historial_Estado` (sin cambiar el estado).
    *
    * @param id - `id_reporte`.
    * @param adminId - `id_usuario` del administrador.
@@ -296,7 +297,6 @@ export class ReportsRepository {
          SELECT id_reporte, '${adminId}', id_estado, id_estado, 'Nivel de riesgo: ${riskLevel}'
          FROM Reporte WHERE id_reporte = ${id}`,
       );
-      await refreshUrlRisk(conn, id);
     });
     return (await this.findById(id))!;
   }
@@ -390,29 +390,6 @@ async function linkUrls(
       `INSERT INTO Reporte_URL (id_reporte, id_url) VALUES (${id}, ${site.insertId})`,
     );
   }
-}
-
-/**
- * Recalcula `nivel_riesgo_global` de las URLs de un reporte: el riesgo más
- * alto entre sus reportes VALIDADO o CANALIZADO; BAJO si no tiene ninguno
- * (regla "Evaluación global de riesgo").
- */
-async function refreshUrlRisk(conn: PoolConnection, id: number): Promise<void> {
-  // FIELD() convierte el nivel en 1..4 para poder sacar el máximo; ELT()
-  // lo regresa a texto. NO_EVALUADO da 0 → NULL → BAJO.
-  await conn.query(
-    `UPDATE SitioWeb_URL s SET
-       nivel_riesgo_global = COALESCE((
-         SELECT ELT(MAX(FIELD(r.nivel_riesgo_asignado, 'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO')),
-                    'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO')
-         FROM Reporte_URL ru
-         JOIN Reporte r ON r.id_reporte = ru.id_reporte
-         JOIN Estado e ON e.id_estado = r.id_estado
-         WHERE ru.id_url = s.id_url AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
-       ), 'BAJO'),
-       fecha_ultima_evaluacion = NOW()
-     WHERE s.id_url IN (SELECT id_url FROM Reporte_URL WHERE id_reporte = ${id})`,
-  );
 }
 
 /**

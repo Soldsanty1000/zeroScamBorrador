@@ -87,6 +87,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | GET    | `/notifications`           | cualquiera           | Mis notificaciones (`?unread=true`) |
 | PATCH  | `/notifications/:id/read`  | cualquiera           | Marca una notificación como leída |
 | GET    | `/risk?q=`                 | cualquiera           | Riesgo de una URL o dominio y reportes validados anónimos |
+| POST   | `/risk/analyze`            | cualquiera           | Analiza una URL (`url`): estructura, certificado, antigüedad del dominio y reportes; regresa `riskLevel`, `score` y el detalle |
 | GET    | `/stats`                   | Admin, Owner, Policia | Conteos por estado, tipo, riesgo, país y mes; tasa de aprobación |
 
 Las rutas con rol requieren `Authorization: Bearer <accessToken>`. Sin él
@@ -103,8 +104,38 @@ RECIBIDO ──► EN_REVISION ──► VALIDADO ──► CANALIZADO (final)
 - Al crearse, cada Administrador y Owner recibe una notificación.
 - Cada cambio de estado o de riesgo queda en `Historial_Estado`, y el
   denunciante recibe una notificación cuando cambia el estado.
-- El riesgo de cada URL (`SitioWeb_URL.nivel_riesgo_global`) es el más alto
-  entre sus reportes VALIDADO o CANALIZADO; si no tiene ninguno, BAJO.
+- El riesgo de cada URL (`SitioWeb_URL.nivel_riesgo_global`) se recalcula
+  con cada cambio de estado o de riesgo de sus reportes. Ver abajo.
+
+### Riesgo de una URL
+
+`POST /risk/analyze` corre cuatro verificaciones; cada una aporta puntos de
+riesgo (0 a 100 en total) y cada 25 puntos sube un nivel: BAJO, MEDIO, ALTO,
+MUY_ALTO.
+
+| Verificación       | Qué revisa |
+|--------------------|------------|
+| `heuristics`       | Estructura de la URL: imita una marca, usa una IP, un `@`, punycode, muchos subdominios |
+| `certificate`      | Certificado TLS: sin HTTPS, no confiable, vencido o muy reciente |
+| `domainAge`        | Fecha de registro del dominio (RDAP; WHOIS para `.mx`) |
+| `communityReports` | Reportes VALIDADO o CANALIZADO del mismo sitio |
+
+- El nivel nunca queda por debajo del reporte validado más grave del sitio:
+  la clasificación de la administración es un piso.
+- El resultado se guarda en `SitioWeb_URL` (`nivel_riesgo_global`,
+  `estado_certificado`, `fecha_ultima_evaluacion`, `detalle_evaluacion`).
+  Analizar la misma URL antes de 24 horas regresa lo guardado
+  (`cached: true`).
+- Cuando cambian los reportes de un sitio, el nivel de sus URLs se vuelve a
+  calcular con las verificaciones guardadas más los reportes actuales, sin
+  conectarse otra vez al sitio. Si la URL nunca se analizó, su nivel sale
+  solo de los reportes.
+
+Si ya tienes la base creada, agrega la columna nueva sin borrar tus datos:
+
+```sql
+ALTER TABLE SitioWeb_URL ADD COLUMN detalle_evaluacion JSON NULL;
+```
 
 ## Conectar la app de iOS
 
@@ -172,7 +203,7 @@ src/
 ├── users/               perfil y gestión de cuentas
 ├── reports/             reportes, evidencias, estados y riesgo
 ├── notifications/       bandeja de notificaciones
-├── risk/                consulta de riesgo por URL
+├── risk/                consulta y análisis de riesgo por URL
 ├── stats/               estadísticas
 ├── catalogs/            catálogos para la app
 └── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)

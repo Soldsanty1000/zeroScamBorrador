@@ -78,6 +78,7 @@ CREATE TABLE SitioWeb_URL (
   nivel_riesgo_global     VARCHAR(20)   NOT NULL DEFAULT 'BAJO' COMMENT 'BAJO, MEDIO, ALTO, MUY_ALTO',
   estado_certificado      VARCHAR(50)   NULL,
   fecha_ultima_evaluacion DATETIME      NULL,
+  detalle_evaluacion      JSON          NULL COMMENT 'Puntaje y verificaciones del último análisis (RF07)',
   -- MySQL no deja un índice sobre 2048 caracteres utf8mb4 (máx. 3072 bytes),
   -- así que el UNIQUE es sobre los primeros 768 caracteres.
   UNIQUE KEY uq_url_texto (url_texto(768))

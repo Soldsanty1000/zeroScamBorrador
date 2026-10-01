@@ -28,7 +28,7 @@ const MAX_EXTRA = 20;
  * @param reports - Reportes VALIDADO o CANALIZADO del dominio, sin datos del
  * denunciante (`RiskRepository.findValidatedReports`).
  * @returns `passed: true` si no hay ninguno. Si hay, los puntos dependen del
- * nivel más alto y de cuántos son.
+ * nivel más alto y de cuántos son, y ese nivel queda como `minLevel`.
  */
 export function checkCommunity(reports: AnonymousReportDto[]): CheckResult {
   if (reports.length === 0) {
@@ -56,5 +56,8 @@ export function checkCommunity(reports: AnonymousReportDto[]): CheckResult {
       `${count} de la comunidad (${fraudTypes})` +
       (worst === 'NO_EVALUADO' ? '' : `; riesgo más alto: ${worst}`),
     points: (POINTS_BY_LEVEL[worst] ?? POINTS_BY_LEVEL.BAJO) + extra,
+    // La clasificación de la administración es un piso: la URL no puede
+    // quedar por debajo del reporte más grave que tiene validado.
+    minLevel: worst === 'NO_EVALUADO' ? undefined : worst,
   };
 }

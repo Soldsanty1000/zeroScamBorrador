@@ -53,4 +53,11 @@ export class AnalyzeResponseDto {
     example: '2026-09-10T18:30:00.000Z',
   })
   evaluatedAt: string;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'true = es un análisis guardado de las últimas 24 horas, no uno nuevo',
+  })
+  cached: boolean;
 }

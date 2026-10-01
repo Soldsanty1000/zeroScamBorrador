@@ -52,16 +52,19 @@ export interface Target {
   address: string | undefined;
 }
 
+/** La URL normalizada, antes de resolver su host. */
+export type NormalizedUrl = Omit<Target, 'address'>;
+
 /**
- * Normaliza una URL y resuelve su host.
+ * Normaliza una URL sin conectarse a nada: host en minúsculas, sin
+ * fragmento. Dos formas de escribir la misma URL dan el mismo resultado,
+ * que es la llave con la que se guarda su análisis.
  *
  * @param raw - La URL tal como llegó, ya validada por `AnalyzeUrlDto`.
- * @returns El destino del análisis; con `address` vacío si el dominio no
- * resuelve.
- * @throws {@link BadRequestException} si la URL no se puede leer, usa un
- * puerto distinto de 80/443 o apunta a una dirección interna.
+ * @throws {@link BadRequestException} si la URL no se puede leer o usa un
+ * puerto distinto de 80/443.
  */
-export async function resolveTarget(raw: string): Promise<Target> {
+export function normalizeUrl(raw: string): NormalizedUrl {
   let parsed: URL;
   try {
     parsed = new URL(raw.trim());
@@ -81,25 +84,62 @@ export async function resolveTarget(raw: string): Promise<Target> {
   if (!ALLOWED_PORTS.includes(port)) {
     throw new BadRequestException('Solo se analizan los puertos 80 y 443');
   }
-  // `new URL` ya dejó el host en minúsculas y en punycode; a una IPv6 le
-  // quitamos los corchetes y a un dominio el punto final ("ejemplo.com.").
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
   // El fragmento (#...) nunca llega al servidor, así que no cambia el sitio.
   parsed.hash = '';
+  return {
+    url: parsed.toString(),
+    hostname: cleanHostname(parsed),
+    protocol,
+    port,
+  };
+}
 
-  const addresses = await resolve(hostname);
+/**
+ * Normaliza una URL y resuelve su host.
+ *
+ * @param raw - La URL tal como llegó, ya validada por `AnalyzeUrlDto`.
+ * @returns El destino del análisis; con `address` vacío si el dominio no
+ * resuelve.
+ * @throws {@link BadRequestException} si la URL no se puede leer, usa un
+ * puerto distinto de 80/443 o apunta a una dirección interna.
+ */
+export async function resolveTarget(raw: string): Promise<Target> {
+  const normalized = normalizeUrl(raw);
+  const addresses = await resolve(normalized.hostname);
   if (addresses.some(isPrivate)) {
     throw new BadRequestException(
       'url apunta a una dirección interna y no se puede analizar',
     );
   }
-  return {
-    url: parsed.toString(),
-    hostname,
-    protocol,
-    port,
-    address: addresses[0],
-  };
+  return { ...normalized, address: addresses[0] };
+}
+
+/**
+ * Host de una URL guardada en `SitioWeb_URL.url_texto`. Las de los reportes
+ * pueden venir sin protocolo (`banco.com/login`), así que se intenta también
+ * con `http://` por delante.
+ *
+ * @returns El host normalizado, o `undefined` si el texto no es una URL.
+ */
+export function hostnameOf(text: string): string | undefined {
+  for (const candidate of [text, 'http://' + text]) {
+    try {
+      const parsed = new URL(candidate.trim());
+      // `banco.com:8080/x` se lee como protocolo "banco.com:" sin host.
+      if (parsed.hostname) return cleanHostname(parsed);
+    } catch {
+      // No era una URL con este formato: se prueba el siguiente.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `new URL` ya dejó el host en minúsculas y en punycode; a una IPv6 le
+ * quitamos los corchetes y a un dominio el punto final ("ejemplo.com.").
+ */
+function cleanHostname(parsed: URL): string {
+  return parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
 }
 
 /**
