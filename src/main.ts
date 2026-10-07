@@ -39,6 +39,10 @@ async function bootstrap() {
     swaggerOptions: { persistAuthorization: true },
   });
 
+  // El panel web sale de otro origen (http://localhost:3001): sin este
+  // permiso el navegador no le deja leer las respuestas de la API.
+  app.enableCors();
+
   // 0.0.0.0 = todas las interfaces de red, no solo localhost: así otra
   // máquina de la misma red puede abrir http://<tu-ip>:3000/uploads/...
   await app.listen(3000, '0.0.0.0');
