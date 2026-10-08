@@ -39,8 +39,10 @@ export class NotificationsController {
   @ApiOperation({
     summary: 'Mis notificaciones (RF06, CU16)',
     description:
-      'Cambios de estado de mis reportes; para Administrador/Owner también ' +
-      'los reportes nuevos por revisar. De la más reciente a la más antigua.',
+      'Cambios de estado de mis reportes y alertas de URLs que consulté o ' +
+      'reporté y subieron a riesgo alto (RF08); para Administrador/Owner ' +
+      'también los reportes nuevos por revisar. De la más reciente a la ' +
+      'más antigua.',
   })
   @ApiOkResponse({ type: NotificationResponseDto, isArray: true })
   findAll(

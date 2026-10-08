@@ -6,6 +6,7 @@ USE ZeroScam;
 DROP TABLE IF EXISTS Notificacion_Alerta;
 DROP TABLE IF EXISTS Historial_Estado;
 DROP TABLE IF EXISTS Reporte_URL;
+DROP TABLE IF EXISTS Consulta_URL;
 DROP TABLE IF EXISTS SitioWeb_URL;
 DROP TABLE IF EXISTS Evidencia;
 DROP TABLE IF EXISTS Reporte;
@@ -94,6 +95,17 @@ CREATE TABLE Reporte_URL (
   FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url)
 );
 
+-- Quién analizó qué URL y cuándo fue la última vez: a esos usuarios se les
+-- avisa si el riesgo de la URL sube (RF08).
+CREATE TABLE Consulta_URL (
+  id_usuario     BIGINT   NOT NULL,
+  id_url         BIGINT   NOT NULL,
+  fecha_consulta DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_usuario, id_url),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url)
+);
+
 CREATE TABLE Historial_Estado (
   id_historial         BIGINT   AUTO_INCREMENT PRIMARY KEY,
   id_reporte           BIGINT   NOT NULL,
@@ -112,11 +124,13 @@ CREATE TABLE Notificacion_Alerta (
   id_notificacion BIGINT   AUTO_INCREMENT PRIMARY KEY,
   id_usuario      BIGINT   NOT NULL,
   id_reporte      BIGINT   NULL,
+  id_url          BIGINT   NULL COMMENT 'URL de la alerta de riesgo (RF08); NULL si el aviso es de un reporte',
   mensaje         TEXT     NOT NULL,
   leido_estatus   BOOLEAN  NOT NULL DEFAULT FALSE,
   fecha_envio     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
-  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte)
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte),
+  FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url)
 );
 
 INSERT INTO Rol (nombre_rol, descripcion) VALUES

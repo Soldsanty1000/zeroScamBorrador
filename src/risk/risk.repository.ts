@@ -137,6 +137,21 @@ export class RiskRepository {
   }
 
   /**
+   * Nivel de riesgo que tiene hoy una URL, sin importar si su análisis es
+   * reciente.
+   *
+   * @param url - URL normalizada (`normalizeUrl`).
+   * @returns `nivel_riesgo_global`, o `undefined` si la URL no está
+   * registrada.
+   */
+  async findRiskLevel(url: string): Promise<string | undefined> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT nivel_riesgo_global FROM SitioWeb_URL WHERE url_texto = '${url}'`,
+    );
+    return rows[0]?.nivel_riesgo_global as string | undefined;
+  }
+
+  /**
    * Todas las URLs registradas de un sitio, con el análisis que tengan.
    *
    * @param hostname - Host normalizado, p. ej. `banco.com`.
@@ -191,6 +206,57 @@ export class RiskRepository {
          nivel_riesgo_global = '${evaluation.riskLevel}',
          detalle_evaluacion = ${jsonLiteral(evaluation)}
        WHERE url_texto = '${url}'`,
+    );
+  }
+
+  /**
+   * Anota que un usuario analizó una URL (`Consulta_URL`). Si ya la había
+   * analizado solo se actualiza la fecha.
+   *
+   * @param userId - `id_usuario` de quien consulta.
+   * @param url - `url_texto` de una URL ya registrada.
+   */
+  async recordLookup(userId: string, url: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO Consulta_URL (id_usuario, id_url)
+       SELECT '${userId}', id_url FROM SitioWeb_URL WHERE url_texto = '${url}'
+       ON DUPLICATE KEY UPDATE fecha_consulta = NOW()`,
+    );
+  }
+
+  /**
+   * Deja una alerta (`Notificacion_Alerta`) a cada usuario activo que
+   * analizó o reportó una URL en los últimos días (RF08).
+   *
+   * @param url - `url_texto` de la URL cuyo riesgo subió.
+   * @param message - Texto de la alerta.
+   * @param days - Qué tan atrás cuenta una consulta o un reporte.
+   * @param exceptUserId - Usuario al que no se avisa: el que provocó el
+   * cambio al analizarla, porque ya tiene el resultado en pantalla.
+   */
+  async alertRecentUsers(
+    url: string,
+    message: string,
+    days: number,
+    exceptUserId?: string,
+  ): Promise<void> {
+    const except = exceptUserId ? `AND d.id_usuario <> '${exceptUserId}'` : '';
+    // UNION (sin ALL) deja una sola fila por usuario aunque haya consultado
+    // y además reportado la URL: recibe una alerta, no dos.
+    await this.pool.query(
+      `INSERT INTO Notificacion_Alerta (id_usuario, id_url, mensaje)
+       SELECT d.id_usuario, s.id_url, '${message}'
+       FROM SitioWeb_URL s
+       JOIN (
+         SELECT c.id_usuario, c.id_url FROM Consulta_URL c
+         WHERE c.fecha_consulta >= NOW() - INTERVAL ${days} DAY
+         UNION
+         SELECT r.id_usuario, ru.id_url FROM Reporte_URL ru
+         JOIN Reporte r ON r.id_reporte = ru.id_reporte
+         WHERE r.fecha_creacion >= NOW() - INTERVAL ${days} DAY
+       ) d ON d.id_url = s.id_url
+       JOIN Usuario u ON u.id_usuario = d.id_usuario
+       WHERE s.url_texto = '${url}' AND u.estado_cuenta = 'ACTIVO' ${except}`,
     );
   }
 }

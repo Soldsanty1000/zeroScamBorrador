@@ -1,5 +1,5 @@
 import { CheckResult } from './checks/check-result';
-import { evaluate } from './scoring';
+import { evaluate, shouldAlert } from './scoring';
 
 function check(points: number, minLevel?: string): CheckResult {
   return { name: 'x', passed: points === 0, detail: '', points, minLevel };
@@ -38,5 +38,22 @@ describe('evaluate', () => {
 
   it('ignora un nivel mínimo desconocido', () => {
     expect(evaluate([check(10, 'NO_EVALUADO')]).riskLevel).toBe('BAJO');
+  });
+});
+
+describe('shouldAlert', () => {
+  it('avisa cuando sube a ALTO o MUY_ALTO', () => {
+    expect(shouldAlert('BAJO', 'ALTO')).toBe(true);
+    expect(shouldAlert('MEDIO', 'MUY_ALTO')).toBe(true);
+    expect(shouldAlert('ALTO', 'MUY_ALTO')).toBe(true);
+  });
+
+  it('no avisa si sube sin llegar a ALTO', () => {
+    expect(shouldAlert('BAJO', 'MEDIO')).toBe(false);
+  });
+
+  it('no avisa si se queda igual o baja', () => {
+    expect(shouldAlert('ALTO', 'ALTO')).toBe(false);
+    expect(shouldAlert('MUY_ALTO', 'ALTO')).toBe(false);
   });
 });

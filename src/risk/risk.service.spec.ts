@@ -42,6 +42,9 @@ describe('RiskService', () => {
       findEvaluationsByHost: jest.fn(),
       saveEvaluation: jest.fn(),
       saveRisk: jest.fn(),
+      findRiskLevel: jest.fn(),
+      recordLookup: jest.fn(),
+      alertRecentUsers: jest.fn(),
     } as unknown as jest.Mocked<RiskRepository>;
     service = new RiskService(repository);
   });
@@ -52,7 +55,10 @@ describe('RiskService', () => {
       stored.riskLevel = 'ALTO';
       repository.findEvaluation.mockResolvedValue(stored);
 
-      const result = await service.analyze('https://PayPa1.com/login#pago');
+      const result = await service.analyze(
+        'https://PayPa1.com/login#pago',
+        '7',
+      );
 
       // Se busca por la URL normalizada: host en minúsculas, sin fragmento.
       expect(repository.findEvaluation).toHaveBeenCalledWith(
@@ -75,11 +81,16 @@ describe('RiskService', () => {
         detail: 'imita a paypal',
       });
       expect(repository.saveEvaluation).not.toHaveBeenCalled();
+      // La consulta se anota aunque el resultado salga del caché (RF08).
+      expect(repository.recordLookup).toHaveBeenCalledWith(
+        '7',
+        'https://paypa1.com/login',
+      );
     });
 
     it('rechaza un puerto no permitido antes de consultar la base', async () => {
       await expect(
-        service.analyze('https://ejemplo.com:3306/'),
+        service.analyze('https://ejemplo.com:3306/', '7'),
       ).rejects.toThrow('Solo se analizan los puertos 80 y 443');
       expect(repository.findEvaluation).not.toHaveBeenCalled();
     });
@@ -146,6 +157,46 @@ describe('RiskService', () => {
         score: 0,
         riskLevel: 'BAJO',
       });
+    });
+
+    it('avisa cuando un reporte sube la URL a riesgo alto (RF08)', async () => {
+      repository.findValidatedReportsByHost.mockResolvedValue([
+        report('MUY_ALTO'),
+      ]);
+      repository.findEvaluationsByHost.mockResolvedValue([
+        site('https://banco-falso.com/login'),
+      ]);
+
+      await service.refreshUrls(['https://banco-falso.com/login']);
+
+      expect(repository.alertRecentUsers).toHaveBeenCalledTimes(1);
+      const [url, message, days, except] =
+        repository.alertRecentUsers.mock.calls[0];
+      expect(url).toBe('https://banco-falso.com/login');
+      expect(message).toContain('riesgo MUY ALTO');
+      expect(days).toBe(30);
+      // Lo provocó la administración: se avisa a todos, sin excepción.
+      expect(except).toBeUndefined();
+    });
+
+    it('no avisa si el nivel no sube o no llega a alto', async () => {
+      // BAJO → MEDIO: sube, pero no es riesgo alto.
+      repository.findValidatedReportsByHost.mockResolvedValue([
+        report('MEDIO'),
+      ]);
+      repository.findEvaluationsByHost.mockResolvedValue([
+        site('https://dudoso.com/'),
+      ]);
+      await service.refreshUrls(['https://dudoso.com/']);
+
+      // ALTO → ALTO: ya estaba en alto, no es una subida.
+      const already = site('https://paypa1.com/login', TECHNICAL);
+      already.riskLevel = 'ALTO';
+      repository.findValidatedReportsByHost.mockResolvedValue([report('BAJO')]);
+      repository.findEvaluationsByHost.mockResolvedValue([already]);
+      await service.refreshUrls(['https://paypa1.com/login']);
+
+      expect(repository.alertRecentUsers).not.toHaveBeenCalled();
     });
 
     it('actualiza todas las URLs del sitio, una vez por sitio', async () => {

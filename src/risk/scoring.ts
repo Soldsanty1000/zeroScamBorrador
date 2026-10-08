@@ -48,3 +48,22 @@ export function evaluate(checks: CheckResult[]): Evaluation {
   );
   return { score, riskLevel: levels[Math.max(byPoints, floor)], checks };
 }
+
+/**
+ * Nivel a partir del cual una subida de riesgo se avisa a los usuarios
+ * (RF08): "si la página es clasificada como de alto riesgo".
+ */
+const ALERT_FROM = 'ALTO';
+
+/**
+ * Dice si el cambio de nivel de una URL amerita una alerta: subió y quedó
+ * en ALTO o MUY_ALTO.
+ *
+ * @param before - Nivel que tenía la URL.
+ * @param after - Nivel recién calculado.
+ */
+export function shouldAlert(before: string, after: string): boolean {
+  const levels: readonly string[] = RISK_LEVELS;
+  const to = levels.indexOf(after);
+  return to > levels.indexOf(before) && to >= levels.indexOf(ALERT_FROM);
+}

@@ -8,11 +8,20 @@ import { checkHeuristics } from './checks/heuristics.check';
 import { AnalyzeResponseDto, RiskCheckDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
 import { RiskRepository } from './risk.repository';
-import { evaluate } from './scoring';
+import { evaluate, shouldAlert } from './scoring';
 import { hostnameOf, normalizeUrl, resolveTarget } from './target';
 
 /** Horas que un análisis guardado se regresa sin repetirlo. */
 const CACHE_HOURS = 24;
+
+/**
+ * Días que cuenta como "reciente" haber consultado o reportado una URL para
+ * recibir la alerta si su riesgo sube (RF08).
+ */
+const ALERT_DAYS = 30;
+
+/** Nivel de una URL que todavía no está en `SitioWeb_URL`. */
+const UNKNOWN_LEVEL = 'BAJO';
 
 /**
  * Verificación de URLs contra la base de reportes validados (CU08, CU13,
@@ -65,13 +74,17 @@ export class RiskService {
    * Si la misma URL se analizó hace menos de {@link CACHE_HOURS} horas
    * regresa lo guardado (`cached: true`) sin conectarse a nada.
    *
+   * Anota la consulta del usuario y, si el análisis sube la URL a riesgo
+   * alto, avisa a quienes la consultaron o reportaron (RF08).
+   *
    * @param url - URL a analizar, ya validada por `AnalyzeUrlDto`.
+   * @param userId - `sub` del access token de quien la analiza.
    * @returns El resultado del análisis. Si el dominio no resuelve,
    * `certificateStatus` es INACCESIBLE.
    * @throws {@link BadRequestException} si la URL usa un puerto distinto de
    * 80/443 o apunta a una dirección interna.
    */
-  async analyze(url: string): Promise<AnalyzeResponseDto> {
+  async analyze(url: string, userId: string): Promise<AnalyzeResponseDto> {
     // La llave del caché es la URL completa ya normalizada. Se busca antes
     // de resolver el DNS, que es lo primero que tarda.
     const normalized = normalizeUrl(url);
@@ -80,6 +93,7 @@ export class RiskService {
       CACHE_HOURS,
     );
     if (stored?.evaluation) {
+      await this.repository.recordLookup(userId, normalized.url);
       return {
         url: normalized.url,
         hostname: normalized.hostname,
@@ -112,10 +126,21 @@ export class RiskService {
       domainAge,
       checkCommunity(reports),
     ]);
+    // El nivel anterior se lee antes de guardar el nuevo, para saber si subió.
+    const before =
+      (await this.repository.findRiskLevel(target.url)) ?? UNKNOWN_LEVEL;
     await this.repository.saveEvaluation(
       target.url,
       certificate.status,
       evaluation,
+    );
+    await this.repository.recordLookup(userId, target.url);
+    // A quien la está analizando no se le avisa: ya tiene el resultado.
+    await this.alertIfRiskRose(
+      target.url,
+      before,
+      evaluation.riskLevel,
+      userId,
     );
     return {
       url: target.url,
@@ -137,7 +162,8 @@ export class RiskService {
    * No vuelve a conectarse a los sitios: toma las verificaciones guardadas
    * de cada URL, cambia solo la de reportes de la comunidad y vuelve a
    * puntuar con {@link evaluate}, igual que {@link analyze}. Así un reporte
-   * nuevo nunca borra lo que el análisis ya había encontrado.
+   * nuevo nunca borra lo que el análisis ya había encontrado. Si una URL
+   * sube a riesgo alto, avisa a quienes la consultaron o reportaron (RF08).
    *
    * @param urls - URLs del reporte que cambió (`Report.urls`).
    */
@@ -160,12 +186,40 @@ export class RiskService {
         const others = (site.evaluation?.checks ?? []).filter(
           (c) => c.name !== community.name,
         );
-        await this.repository.saveRisk(
+        const evaluation = evaluate([...others, community]);
+        await this.repository.saveRisk(site.url, evaluation);
+        await this.alertIfRiskRose(
           site.url,
-          evaluate([...others, community]),
+          site.riskLevel,
+          evaluation.riskLevel,
         );
       }
     }
+  }
+
+  /**
+   * Avisa a los usuarios que consultaron o reportaron una URL hace poco si
+   * su riesgo subió a ALTO o MUY_ALTO (RF08, regla "Generación de Alertas").
+   *
+   * @param url - `url_texto` de la URL.
+   * @param before - Nivel que tenía.
+   * @param after - Nivel recién calculado.
+   * @param exceptUserId - Usuario al que no se avisa.
+   */
+  private async alertIfRiskRose(
+    url: string,
+    before: string,
+    after: string,
+    exceptUserId?: string,
+  ): Promise<void> {
+    if (!shouldAlert(before, after)) return;
+    await this.repository.alertRecentUsers(
+      url,
+      `Alerta: ${url} subió a riesgo ${after.replace('_', ' ')}. ` +
+        'La consultaste o reportaste recientemente: evita entrar o dar tus datos.',
+      ALERT_DAYS,
+      exceptUserId,
+    );
   }
 }
 

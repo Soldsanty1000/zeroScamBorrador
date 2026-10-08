@@ -11,6 +11,14 @@ export class NotificationResponseDto {
   })
   reportId?: number;
 
+  @ApiPropertyOptional({
+    example: 'https://banco-seguro-mx.com/login',
+    description:
+      'URL de una alerta de riesgo (RF08). Para ver el detalle de la ' +
+      'amenaza, mándala a `POST /risk/analyze`',
+  })
+  url?: string;
+
   @ApiProperty({ example: 'Tu reporte #1 cambió a VALIDADO' })
   message: string;
 
@@ -28,6 +36,7 @@ export class NotificationResponseDto {
     const dto = new NotificationResponseDto();
     dto.id = notification.id!;
     dto.reportId = notification.reportId;
+    dto.url = notification.url;
     dto.message = notification.message!;
     dto.read = notification.read!;
     dto.sentAt = notification.sentAt!.toISOString();

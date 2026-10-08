@@ -6,14 +6,20 @@ import { DB_POOL } from '../database/database.module';
 import { Notification } from './entities/notification.entity';
 
 const COLUMNS =
-  'id_notificacion, id_usuario, id_reporte, mensaje, leido_estatus, fecha_envio';
+  'n.id_notificacion, n.id_usuario, n.id_reporte, s.url_texto, n.mensaje, ' +
+  'n.leido_estatus, n.fecha_envio';
+
+// LEFT JOIN: solo las alertas de riesgo de una URL (RF08) traen `id_url`.
+const FROM =
+  'Notificacion_Alerta n LEFT JOIN SitioWeb_URL s ON s.id_url = n.id_url';
 
 /**
  * Acceso a la tabla `Notificacion_Alerta`.
  *
  * @remarks
  * Las notificaciones se crean desde `ReportsRepository` (nuevo reporte,
- * cambio de estado); aquí solo se leen y se marcan como leídas.
+ * cambio de estado) y `RiskRepository` (sube el riesgo de una URL); aquí
+ * solo se leen y se marcan como leídas.
  */
 @Injectable()
 export class NotificationsRepository {
@@ -27,11 +33,11 @@ export class NotificationsRepository {
    * @param onlyUnread - `true` para traer solo las no leídas.
    */
   async findAll(userId: string, onlyUnread: boolean): Promise<Notification[]> {
-    const unread = onlyUnread ? 'AND leido_estatus = FALSE' : '';
+    const unread = onlyUnread ? 'AND n.leido_estatus = FALSE' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM Notificacion_Alerta
-       WHERE id_usuario = '${userId}' ${unread}
-       ORDER BY fecha_envio DESC, id_notificacion DESC`,
+      `SELECT ${COLUMNS} FROM ${FROM}
+       WHERE n.id_usuario = '${userId}' ${unread}
+       ORDER BY n.fecha_envio DESC, n.id_notificacion DESC`,
     );
     return rows.map(toEntity);
   }
@@ -53,7 +59,7 @@ export class NotificationsRepository {
     );
     if (result.affectedRows === 0) return undefined;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM Notificacion_Alerta WHERE id_notificacion = ${id}`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE n.id_notificacion = ${id}`,
     );
     return toEntity(rows[0]);
   }
@@ -67,6 +73,7 @@ function toEntity(row: any): Notification {
   notification.id = row.id_notificacion;
   notification.userId = String(row.id_usuario);
   notification.reportId = row.id_reporte ?? undefined;
+  notification.url = row.url_texto ?? undefined;
   notification.message = row.mensaje;
   // MySQL guarda BOOLEAN como TINYINT: llega 0 o 1.
   notification.read = Boolean(row.leido_estatus);

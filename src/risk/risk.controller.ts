@@ -16,6 +16,8 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
+import type { JwtPayload } from '../auth/jwt';
 import {
   ErrorResponseDto,
   ValidationErrorResponseDto,
@@ -62,7 +64,9 @@ export class RiskController {
     description:
       'Cualquier rol. Normaliza la URL, corre las verificaciones y regresa ' +
       'el nivel de riesgo con el detalle de cada una. Un sitio que no ' +
-      'responde no es un error: regresa 200 con la advertencia.',
+      'responde no es un error: regresa 200 con la advertencia. Queda ' +
+      'anotado que el usuario la consultó: si su riesgo sube después a ' +
+      'ALTO o MUY_ALTO recibe una notificación (RF08).',
   })
   @ApiOkResponse({ type: AnalyzeResponseDto })
   @ApiBadRequestResponse({
@@ -71,7 +75,10 @@ export class RiskController {
       'dirección interna',
     type: ValidationErrorResponseDto,
   })
-  analyze(@Body() dto: AnalyzeUrlDto): Promise<AnalyzeResponseDto> {
-    return this.service.analyze(dto.url);
+  analyze(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: AnalyzeUrlDto,
+  ): Promise<AnalyzeResponseDto> {
+    return this.service.analyze(dto.url, user.sub);
   }
 }

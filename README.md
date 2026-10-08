@@ -86,7 +86,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | POST   | `/reports/:id/evidence`    | Usuario (dueño)      | Sube un archivo de evidencia (multipart, campo `file`) |
 | PATCH  | `/reports/:id/status`      | Admin, Owner         | `EN_REVISION`, `VALIDADO`, `RECHAZADO` (exige `observations`) o `CANALIZADO` |
 | PATCH  | `/reports/:id/risk`        | Admin, Owner         | Asigna `riskLevel`: BAJO, MEDIO, ALTO o MUY_ALTO |
-| GET    | `/notifications`           | cualquiera           | Mis notificaciones (`?unread=true`) |
+| GET    | `/notifications`           | cualquiera           | Mis notificaciones (`?unread=true`); las alertas de riesgo traen `url` |
 | PATCH  | `/notifications/:id/read`  | cualquiera           | Marca una notificación como leída |
 | GET    | `/risk?q=`                 | cualquiera           | Riesgo de una URL o dominio y reportes validados anónimos |
 | POST   | `/risk/analyze`            | cualquiera           | Analiza una URL (`url`): estructura, certificado, antigüedad del dominio y reportes; regresa `riskLevel`, `score` y el detalle |
@@ -133,11 +133,35 @@ MUY_ALTO.
   conectarse otra vez al sitio. Si la URL nunca se analizó, su nivel sale
   solo de los reportes.
 
-Si ya tienes la base creada, agrega las columnas nuevas sin borrar tus datos:
+### Alertas de riesgo (RF08)
+
+- Cada `POST /risk/analyze` anota en `Consulta_URL` quién analizó qué URL.
+- Cuando una URL **sube** a ALTO o MUY_ALTO (por un análisis nuevo o porque
+  la administración validó o clasificó un reporte), reciben una notificación
+  los usuarios activos que la analizaron o la reportaron en los últimos 30
+  días. Quien provoca la subida al analizarla no recibe aviso: ya tiene el
+  resultado.
+- La notificación trae `url`. Para ver el detalle de la amenaza, la app la
+  manda a `POST /risk/analyze`.
+- Llegan a la bandeja (`GET /notifications`); la app debe consultarla. No hay
+  notificaciones push.
+
+Si ya tienes la base creada, agrega lo nuevo sin borrar tus datos:
 
 ```sql
 ALTER TABLE SitioWeb_URL ADD COLUMN detalle_evaluacion JSON NULL;
 ALTER TABLE Usuario ADD COLUMN fecha_consentimiento DATETIME NULL;
+CREATE TABLE Consulta_URL (
+  id_usuario     BIGINT   NOT NULL,
+  id_url         BIGINT   NOT NULL,
+  fecha_consulta DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_usuario, id_url),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url)
+);
+ALTER TABLE Notificacion_Alerta
+  ADD COLUMN id_url BIGINT NULL AFTER id_reporte,
+  ADD FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url);
 ```
 
 ## Conectar la app de iOS
