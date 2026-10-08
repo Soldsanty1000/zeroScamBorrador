@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  Equals,
   IsEmail,
   IsNotEmpty,
   IsString,
@@ -43,4 +44,15 @@ export class RegisterDto {
     message: 'password debe tener al menos un carácter especial',
   })
   password: string | undefined;
+
+  @ApiProperty({
+    type: Boolean,
+    description:
+      'Consentimiento del aviso de privacidad (RNF07): debe venir en true',
+    example: true,
+  })
+  // Solo `true` cuenta como consentimiento explícito: ni false, ni "true"
+  // como texto, ni el campo ausente.
+  @Equals(true, { message: 'Debes aceptar el aviso de privacidad' })
+  acceptsPrivacy: boolean | undefined;
 }

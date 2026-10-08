@@ -38,6 +38,7 @@ CREATE TABLE Usuario (
   contrasena_hash    VARCHAR(255) NOT NULL,
   estado_cuenta      VARCHAR(20)  NOT NULL DEFAULT 'ACTIVO' COMMENT 'ACTIVO, SUSPENDIDO',
   fecha_registro     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  fecha_consentimiento DATETIME   NULL COMMENT 'Aceptación del aviso de privacidad (RNF07); NULL en las cuentas de arranque',
   FOREIGN KEY (id_rol) REFERENCES Rol(id_rol)
 );
 

@@ -24,7 +24,8 @@ export class AuthService {
   /**
    * Registra un usuario nuevo guardando el hash de su password.
    *
-   * @param dto - Nombre, apellido, país, email y password ya validados.
+   * @param dto - Nombre, apellido, país, email y password ya validados, con
+   * el consentimiento del aviso de privacidad (RNF07).
    * @returns El `id` y `email` del usuario creado y el mensaje de
    * confirmación (CU01). Nunca el password.
    * @throws {@link ConflictException} si el email ya está registrado.

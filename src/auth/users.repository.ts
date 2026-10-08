@@ -5,7 +5,7 @@ import { User } from './entities/user.entity';
 
 const COLUMNS =
   'u.id_usuario, u.correo_electronico, u.contrasena_hash, u.nombre, u.apellido, ' +
-  'u.pais, u.estado_cuenta, u.fecha_registro, r.nombre_rol';
+  'u.pais, u.estado_cuenta, u.fecha_registro, u.fecha_consentimiento, r.nombre_rol';
 
 /**
  * Acceso a la tabla `Usuario` de MySQL.
@@ -30,7 +30,8 @@ export class UsersRepository {
 
   /**
    * Inserta un usuario con rol `Usuario` y lo regresa tal como quedó en la
-   * base.
+   * base. Deja constancia de la fecha en que aceptó el aviso de privacidad
+   * (RNF07): el DTO de registro ya exigió ese consentimiento.
    *
    * @param user - Datos del usuario; el email debe ser único.
    * @param passwordHash - Hash SHA-256 en hex del password, no el password.
@@ -43,9 +44,9 @@ export class UsersRepository {
     // `id_usuario` es AUTO_INCREMENT: lo asigna MySQL. Todo registro nuevo
     // entra con el rol `Usuario`; los demás roles se asignan a mano.
     await this.pool.query(
-      `INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash)
+      `INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash, fecha_consentimiento)
        VALUES ((SELECT id_rol FROM Rol WHERE nombre_rol = 'Usuario'),
-               '${user.name}', '${user.lastName}', '${user.country}', '${user.email}', '${passwordHash}')`,
+               '${user.name}', '${user.lastName}', '${user.country}', '${user.email}', '${passwordHash}', NOW())`,
     );
     // Releemos para traer el `id_usuario` y `fecha_registro` que asignó MySQL.
     return (await this.findByEmail(user.email!))!;
@@ -151,5 +152,6 @@ function toEntity(row: any): User {
   user.role = row.nombre_rol;
   user.accountStatus = row.estado_cuenta;
   user.createdAt = row.fecha_registro;
+  user.privacyAcceptedAt = row.fecha_consentimiento ?? undefined;
   return user;
 }

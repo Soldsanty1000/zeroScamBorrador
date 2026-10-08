@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { User } from '../../auth/entities/user.entity';
 
 export class UserResponseDto {
@@ -33,6 +33,15 @@ export class UserResponseDto {
   })
   createdAt: string;
 
+  @ApiPropertyOptional({
+    format: 'date-time',
+    description:
+      'Cuándo aceptó el aviso de privacidad (RNF07); no viene en las ' +
+      'cuentas que no se crearon con el registro',
+    example: '2026-09-10T18:30:00.000Z',
+  })
+  privacyAcceptedAt?: string;
+
   static fromEntity(user: User): UserResponseDto {
     const dto = new UserResponseDto();
     dto.id = user.id!;
@@ -43,6 +52,7 @@ export class UserResponseDto {
     dto.role = user.role!;
     dto.accountStatus = user.accountStatus!;
     dto.createdAt = user.createdAt!.toISOString();
+    dto.privacyAcceptedAt = user.privacyAcceptedAt?.toISOString();
     return dto;
   }
 }

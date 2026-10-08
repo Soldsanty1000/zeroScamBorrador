@@ -34,11 +34,13 @@ export class AuthController {
   @Post('register')
   @ApiOperation({
     summary: 'Registrar un usuario',
-    description: 'El password se guarda hasheado; nunca se regresa.',
+    description:
+      'El password se guarda hasheado; nunca se regresa. Exige ' +
+      '`acceptsPrivacy: true` y guarda la fecha del consentimiento (RNF07).',
   })
   @ApiCreatedResponse({ type: RegisterResponseDto })
   @ApiBadRequestResponse({
-    description: 'Body inválido',
+    description: 'Body inválido o sin aceptar el aviso de privacidad',
     type: ValidationErrorResponseDto,
   })
   @ApiConflictResponse({

@@ -68,7 +68,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 |--------|----------------------------|----------------------|----------|
 | GET    | `/`                        | —                    | Comprueba que el servidor responde (`Hello World!`) |
 | GET    | `/catalogs`                | —                    | Tipos de fraude, estados, niveles de riesgo y roles |
-| POST   | `/auth/register`           | —                    | Crea un usuario (`name`, `lastName`, `country`, `email`, `password` ≥ 8 con un carácter especial) |
+| POST   | `/auth/register`           | —                    | Crea un usuario (`name`, `lastName`, `country`, `email`, `password` ≥ 8 con un carácter especial, `acceptsPrivacy: true`) |
 | POST   | `/auth/login`              | —                    | Regresa `accessToken` (15 min) y `refreshToken` (7 días). 403 si la cuenta está suspendida |
 | POST   | `/auth/refresh`            | —                    | Access token nuevo a partir del refresh |
 | POST   | `/auth/logout`             | cualquiera           | 204; la app borra sus tokens |
@@ -131,10 +131,11 @@ MUY_ALTO.
   conectarse otra vez al sitio. Si la URL nunca se analizó, su nivel sale
   solo de los reportes.
 
-Si ya tienes la base creada, agrega la columna nueva sin borrar tus datos:
+Si ya tienes la base creada, agrega las columnas nuevas sin borrar tus datos:
 
 ```sql
 ALTER TABLE SitioWeb_URL ADD COLUMN detalle_evaluacion JSON NULL;
+ALTER TABLE Usuario ADD COLUMN fecha_consentimiento DATETIME NULL;
 ```
 
 ## Conectar la app de iOS

@@ -11,4 +11,10 @@ export class User {
   /** `estado_cuenta`: ACTIVO o SUSPENDIDO. */
   accountStatus: string | undefined;
   createdAt: Date | undefined;
+  /**
+   * `fecha_consentimiento`: cuándo aceptó el aviso de privacidad (RNF07).
+   * Las cuentas de arranque de `db/schema.sql` no pasan por el registro y
+   * no la tienen.
+   */
+  privacyAcceptedAt: Date | undefined;
 }
