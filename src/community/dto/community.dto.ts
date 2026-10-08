@@ -25,11 +25,23 @@ export class AffectedPersonDto {
   @ApiProperty({ example: 'María López' })
   @IsString()
   @Length(2, 100)
+  @Matches(/^\p{L}[\p{L}\p{M} .'’-]*$/u, {
+    message: 'El nombre solo lleva letras y espacios, sin números ni símbolos',
+  })
   name: string;
 
   @ApiProperty({ example: '55 1234 5678', description: 'Teléfono o correo' })
   @IsString()
   @Length(5, 150)
+  // Un correo, o un teléfono de 8 a 15 dígitos con + al inicio y
+  // separadores (espacio, paréntesis, guion): la misma regla que la app.
+  @Matches(
+    /^(?:[^\s@]+@[^\s@]+\.[A-Za-z]{2,}|\+?[ ()-]*(?:\d[ ()-]*){8,15})$/,
+    {
+      message:
+        'contact debe ser un correo válido o un teléfono de 8 a 15 dígitos',
+    },
+  )
   contact: string;
 
   @ApiProperty({
@@ -98,6 +110,9 @@ export class SaveCommunityReportDto {
   @ApiProperty({ example: 'Guadalajara', description: '2 a 60' })
   @IsString()
   @Length(2, 60)
+  @Matches(/^[^\p{N}]*\p{L}[^\p{N}]*\p{L}[^\p{N}]*$/u, {
+    message: 'city debe ser el nombre de la ciudad, sin números',
+  })
   city: string;
 
   @ApiPropertyOptional({
@@ -240,6 +255,20 @@ export class CommunityReportDto {
   @ApiProperty() confirmedByMe: boolean;
   @ApiProperty() savedByMe: boolean;
   @ApiProperty() mine: boolean;
+}
+
+export class PublicProfileDto {
+  @ApiProperty({ example: '4', description: 'id_usuario' }) id: string;
+  @ApiProperty({ example: 'dana.azul' }) alias: string;
+  @ApiProperty() bio: string;
+  @ApiProperty({ description: 'Se baja de GET /account/avatar/:id' })
+  hasAvatar: boolean;
+  @ApiProperty({ format: 'date-time' }) memberSince: string;
+  @ApiProperty({
+    type: [CommunityReportDto],
+    description: 'Sus reportes públicos y no anónimos',
+  })
+  reports: CommunityReportDto[];
 }
 
 export class CommentResponseDto {

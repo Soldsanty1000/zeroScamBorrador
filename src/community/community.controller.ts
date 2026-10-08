@@ -42,6 +42,7 @@ import {
   CommunityReportDto,
   CommunityStatsDto,
   HistoryEntryDto,
+  PublicProfileDto,
   SaveCommunityReportDto,
   UpdateCommunityReportDto,
 } from './dto/community.dto';
@@ -85,6 +86,21 @@ export class CommunityController {
   @ApiOkResponse({ type: CategoryDto, isArray: true })
   categories(@CurrentUser() user: JwtPayload): Promise<CategoryDto[]> {
     return this.service.categories(user.sub);
+  }
+
+  @Get('users/:id')
+  @ApiOperation({
+    summary: 'Perfil público de quien firmó un reporte',
+    description:
+      'Alias, biografía y sus reportes públicos no anónimos. Solo si la ' +
+      'persona activó su perfil público (o es el propio, o moderas); si no, 404.',
+  })
+  @ApiOkResponse({ type: PublicProfileDto })
+  publicProfile(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<PublicProfileDto> {
+    return this.service.publicProfile(user.sub, id);
   }
 
   @Get('reports/:id')

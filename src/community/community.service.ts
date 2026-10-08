@@ -7,7 +7,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Profile } from '../account/account.repository';
+import { AccountRepository, Profile } from '../account/account.repository';
 import { AccountService, isStaff } from '../account/account.service';
 import { AccountResponseDto } from '../account/dto/account.dto';
 import { DELETED_STATUS } from '../account/account.repository';
@@ -33,6 +33,7 @@ import {
   CommunityReportDto,
   CommunityStatsDto,
   HistoryEntryDto,
+  PublicProfileDto,
   SaveCommunityReportDto,
   UpdateCommunityReportDto,
 } from './dto/community.dto';
@@ -56,6 +57,7 @@ export class CommunityService {
   constructor(
     private readonly repository: CommunityRepository,
     private readonly accounts: AccountService,
+    private readonly accountsRepository: AccountRepository,
     private readonly analytics: AnalyticsService,
   ) {}
 
@@ -83,6 +85,33 @@ export class CommunityService {
   async findOne(userId: string, id: number): Promise<CommunityReportDto> {
     const me = await this.accounts.requireActive(userId);
     return toView(await this.visible(me, id), me);
+  }
+
+  /**
+   * Perfil público de quien firmó un reporte: alias, biografía, si tiene
+   * avatar y sus reportes públicos no anónimos. Nunca el correo, el nombre
+   * real ni el país.
+   *
+   * @throws {@link NotFoundException} si la cuenta no existe, se eliminó, o no
+   * tiene perfil público y quien pide no es ella misma ni modera.
+   */
+  async publicProfile(userId: string, id: number): Promise<PublicProfileDto> {
+    const me = await this.accounts.requireActive(userId);
+    const owner = await this.accountsRepository.findById(id);
+    const visible =
+      owner &&
+      owner.accountStatus !== DELETED_STATUS &&
+      (owner.id === me.id || isStaff(me) || owner.preferences.publicProfile);
+    if (!visible) throw new NotFoundException('Perfil no encontrado');
+    const reports = await this.repository.listSignedBy(me.id, owner.id);
+    return {
+      id: String(owner.id),
+      alias: owner.alias,
+      bio: owner.bio,
+      hasAvatar: Boolean(owner.avatarFile),
+      memberSince: owner.createdAt.toISOString(),
+      reports: reports.map((r) => toView(r, me)),
+    };
   }
 
   // ---------- Crear, editar, eliminar ----------

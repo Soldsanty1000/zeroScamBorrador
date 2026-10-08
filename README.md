@@ -259,6 +259,7 @@ detalle de cada body está en `/docs` (tags `account` y `community`).
 | GET / POST | `/community/reports/:id/comments` | Comentarios (máx. 5 por minuto) |
 | DELETE | `/community/comments/:id`            | Borra un comentario propio, o cualquiera si moderas |
 | GET    | `/community/reports/:id/history`     | Historial de estados (autor o quien modera) |
+| GET    | `/community/users/:id`               | Perfil público de quien firmó un reporte (alias, biografía y sus reportes públicos no anónimos) |
 | GET    | `/community/stats`                   | Números de la comunidad |
 | GET    | `/community/categories`              | Reportes públicos por tipo de fraude |
 

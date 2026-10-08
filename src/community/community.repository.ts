@@ -170,6 +170,23 @@ export class CommunityRepository {
     return this.withRelations(rows);
   }
 
+  /**
+   * Reportes que una persona firmó con su nombre: públicos y no anónimos,
+   * del más reciente al más antiguo. Es lo que muestra su perfil público.
+   */
+  async listSignedBy(
+    viewerId: number,
+    authorId: number,
+  ): Promise<CommunityReport[]> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT ${COLUMNS} FROM ${FROM}
+       WHERE r.id_usuario = ? AND r.es_anonimo = FALSE AND e.nombre_estado IN ${PUBLIC}
+       ORDER BY r.fecha_creacion DESC, r.id_reporte DESC`,
+      [viewerId, viewerId, authorId],
+    );
+    return this.withRelations(rows);
+  }
+
   /** `id_tipo_fraude` de un tipo por su nombre; `undefined` si no existe. */
   async fraudTypeId(name: string): Promise<number | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
