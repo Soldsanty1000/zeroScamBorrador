@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
+import { checkBlacklist } from './checks/blacklist.check';
 import { checkCertificate } from './checks/certificate.check';
 import { CheckResult } from './checks/check-result';
 import { checkCommunity } from './checks/community.check';
@@ -111,11 +112,11 @@ export class RiskService {
     const target = await resolveTarget(url);
     // Las verificaciones no dependen entre sí: van en paralelo para que la
     // respuesta tarde lo que la más lenta, no la suma (RNF01). Ninguna lanza
-    // error si el sitio o un servicio externo no contesta. Falta: listas
-    // negras.
-    const [certificate, domainAge, reports] = await Promise.all([
+    // error si el sitio o un servicio externo no contesta.
+    const [certificate, domainAge, blacklist, reports] = await Promise.all([
       checkCertificate(target),
       checkDomainAge(target),
+      checkBlacklist(target),
       // Por host y no por URL completa: cuentan los reportes de cualquier
       // página del mismo sitio.
       this.repository.findValidatedReportsByHost(target.hostname),
@@ -124,6 +125,7 @@ export class RiskService {
       checkHeuristics(target),
       certificate,
       domainAge,
+      blacklist,
       checkCommunity(reports),
     ]);
     // El nivel anterior se lee antes de guardar el nuevo, para saber si subió.
