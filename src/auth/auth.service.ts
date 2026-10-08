@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -117,6 +119,35 @@ export class AuthService {
       ACCESS_TTL,
     );
     return { accessToken };
+  }
+
+  /**
+   * Cambia el password del usuario del token.
+   *
+   * @param userId - `sub` del access token.
+   * @param dto - Password actual y nuevo; el nuevo ya cumple las reglas del
+   * registro.
+   * @throws {@link UnauthorizedException} si la cuenta del token ya no existe.
+   * @throws {@link BadRequestException} si el password actual no coincide o
+   * el nuevo es igual al actual.
+   */
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('El usuario no existe');
+    }
+    // Pedir el password actual evita que alguien con un token ajeno (o con
+    // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
+    // no un 401: el token es válido, lo que está mal es el dato.
+    if (user.passwordHash !== hash(dto.currentPassword!)) {
+      throw new BadRequestException('El password actual es incorrecto');
+    }
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException(
+        'El password nuevo debe ser distinto al actual',
+      );
+    }
+    await this.users.updatePassword(userId, hash(dto.newPassword!));
   }
 }
 

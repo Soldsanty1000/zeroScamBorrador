@@ -6,6 +6,7 @@ import {
 import type { JwtPayload } from '../auth/jwt';
 import { UsersRepository } from '../auth/users.repository';
 import { ROLES } from '../common/constants';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserFiltersDto } from './dto/user-filters.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -41,6 +42,25 @@ export class UsersService {
   async findAll(filters: UserFiltersDto): Promise<UserResponseDto[]> {
     const users = await this.users.findAll(filters);
     return users.map((u) => UserResponseDto.fromEntity(u));
+  }
+
+  /**
+   * Edita los datos del propio usuario.
+   *
+   * @param id - `sub` del access token.
+   * @param changes - Nombre, apellido o país; los ausentes no se tocan.
+   * @returns El usuario ya actualizado.
+   * @throws {@link NotFoundException} si la cuenta del token ya no existe.
+   */
+  async updateMe(
+    id: string,
+    changes: UpdateProfileDto,
+  ): Promise<UserResponseDto> {
+    const updated = await this.users.update(id, changes);
+    if (!updated) {
+      throw new NotFoundException('Usuario ' + id + ' no encontrado');
+    }
+    return UserResponseDto.fromEntity(updated);
   }
 
   /**

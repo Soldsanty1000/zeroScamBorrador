@@ -28,6 +28,7 @@ import {
   ValidationErrorResponseDto,
 } from '../common/dto/error-response.dto';
 import { ROLES } from '../common/constants';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserFiltersDto } from './dto/user-filters.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -51,6 +52,27 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   me(@CurrentUser() user: JwtPayload): Promise<UserResponseDto> {
     return this.service.findOne(user.sub);
+  }
+
+  // Va antes de `@Patch(':id')`: si no, Nest tomaría "me" como un id.
+  @Patch('me')
+  @ApiOperation({
+    summary: 'Editar mi perfil',
+    description:
+      'Cualquier rol. Cambia `name`, `lastName` o `country` de la cuenta ' +
+      'del token; solo se modifican los campos que vengan. El rol y el ' +
+      'estado de la cuenta no se cambian aquí.',
+  })
+  @ApiOkResponse({ type: UserResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Body inválido',
+    type: ValidationErrorResponseDto,
+  })
+  updateMe(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateProfileDto,
+  ): Promise<UserResponseDto> {
+    return this.service.updateMe(user.sub, dto);
   }
 
   @Get()

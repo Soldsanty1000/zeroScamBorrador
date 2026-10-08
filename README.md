@@ -72,7 +72,9 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | POST   | `/auth/login`              | —                    | Regresa `accessToken` (15 min) y `refreshToken` (7 días). 403 si la cuenta está suspendida |
 | POST   | `/auth/refresh`            | —                    | Access token nuevo a partir del refresh |
 | POST   | `/auth/logout`             | cualquiera           | 204; la app borra sus tokens |
+| PATCH  | `/auth/password`           | cualquiera           | Cambia mi password (`currentPassword`, `newPassword`); 204 |
 | GET    | `/users/me`                | cualquiera           | Mi perfil |
+| PATCH  | `/users/me`                | cualquiera           | Edita mi `name`, `lastName` o `country` |
 | GET    | `/users`                   | Admin, Owner         | Lista cuentas (`?role=&accountStatus=&q=`) |
 | GET    | `/users/:id`               | Admin, Owner         | Una cuenta |
 | PATCH  | `/users/:id`               | Admin, Owner         | Edita o suspende (`accountStatus`); solo Owner cambia `role` |

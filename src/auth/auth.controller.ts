@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -17,14 +24,17 @@ import {
 } from '../common/dto/error-response.dto';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
+import { CurrentUser } from './current-user.decorator';
 import {
   LoginResponseDto,
   RefreshResponseDto,
   RegisterResponseDto,
 } from './dto/auth-response.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import type { JwtPayload } from './jwt';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -114,4 +124,32 @@ export class AuthController {
     type: ErrorResponseDto,
   })
   logout(): void {}
+
+  @Patch('password')
+  @HttpCode(204)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Cambiar mi password',
+    description:
+      'Cualquier rol. Pide el password actual y el nuevo, que debe cumplir ' +
+      'las reglas del registro. Los tokens ya emitidos siguen sirviendo ' +
+      'hasta que expiran.',
+  })
+  @ApiNoContentResponse({ description: 'Password cambiado, sin cuerpo' })
+  @ApiBadRequestResponse({
+    description:
+      'Body inválido, password actual incorrecto o nuevo igual al actual',
+    type: ValidationErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Falta el token, o es inválido o expiró',
+    type: ErrorResponseDto,
+  })
+  changePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<void> {
+    return this.service.changePassword(user.sub, dto);
+  }
 }

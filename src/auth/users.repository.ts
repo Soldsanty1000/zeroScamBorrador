@@ -133,6 +133,18 @@ export class UsersRepository {
     }
     return this.findById(id);
   }
+
+  /**
+   * Reemplaza el hash del password de un usuario.
+   *
+   * @param id - `id_usuario`.
+   * @param passwordHash - Hash SHA-256 en hex del password nuevo.
+   */
+  async updatePassword(id: string, passwordHash: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE Usuario SET contrasena_hash = '${passwordHash}' WHERE id_usuario = '${id}'`,
+    );
+  }
 }
 
 /**
