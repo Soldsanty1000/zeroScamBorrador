@@ -18,6 +18,8 @@ import {
   ValidationErrorResponseDto,
 } from '../common/dto/error-response.dto';
 import { ROLES } from '../common/constants';
+import { SiteStatsQueryDto } from './dto/site-stats-query.dto';
+import { SiteStatsResponseDto } from './dto/site-stats-response.dto';
 import { StatsQueryDto } from './dto/stats-query.dto';
 import { StatsResponseDto } from './dto/stats-response.dto';
 import { StatsService } from './stats.service';
@@ -55,5 +57,27 @@ export class StatsController {
     @Query() query: StatsQueryDto,
   ): Promise<StatsResponseDto> {
     return this.service.summary(user, query);
+  }
+
+  @Get('site')
+  @Roles(ROLES.ADMIN, ROLES.OWNER)
+  @ApiOperation({
+    summary: 'Métricas de la plataforma',
+    description:
+      'Administrador u Owner. Cuentas por rol, estado, país y mes de ' +
+      'registro; directorio de URLs por riesgo; consultas de riesgo y ' +
+      'notificaciones. `from` y `to` limitan el periodo de la actividad.',
+  })
+  @ApiOkResponse({ type: SiteStatsResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Filtro inválido',
+    type: ValidationErrorResponseDto,
+  })
+  @ApiForbiddenResponse({
+    description: 'Rol sin acceso',
+    type: ErrorResponseDto,
+  })
+  site(@Query() query: SiteStatsQueryDto): Promise<SiteStatsResponseDto> {
+    return this.service.site(query);
   }
 }

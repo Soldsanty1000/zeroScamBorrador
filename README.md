@@ -94,6 +94,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | GET    | `/risk?q=`                 | cualquiera           | Riesgo de una URL o dominio y reportes validados anónimos |
 | POST   | `/risk/analyze`            | cualquiera           | Analiza una URL (`url`): estructura, certificado, antigüedad del dominio y reportes; regresa `riskLevel`, `score` y el detalle |
 | GET    | `/stats`                   | Admin, Owner, Policia | Conteos por estado, tipo, riesgo, país y mes; tasa de aprobación |
+| GET    | `/stats/site`              | Admin, Owner         | Métricas de la plataforma: cuentas, URLs, consultas de riesgo y notificaciones (`?from=&to=`) |
 
 Las rutas con rol requieren `Authorization: Bearer <accessToken>`. Sin él
 responden 401; con un rol sin acceso, 403.
