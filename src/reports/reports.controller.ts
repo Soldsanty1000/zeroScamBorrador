@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -31,6 +32,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -44,6 +46,7 @@ import {
 import { ROLES } from '../common/constants';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateReportDto } from './dto/create-report.dto';
+import { ReportExportDto } from './dto/report-export.dto';
 import { ReportFiltersDto } from './dto/report-filters.dto';
 import { ReportResponseDto } from './dto/report-response.dto';
 import { SetRiskDto } from './dto/set-risk.dto';
@@ -127,6 +130,49 @@ export class ReportsController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<ReportResponseDto> {
     return this.service.findOne(user, id);
+  }
+
+  @Get(':id/export')
+  @Roles(ROLES.ADMIN, ROLES.OWNER, ROLES.POLICE)
+  @ApiOperation({
+    summary: 'Exportar el expediente de un reporte verificado',
+    description:
+      'Administrador, Owner o Policia. Regresa el reporte en el formato ' +
+      'estandarizado para canalizarlo a la Policía Cibernética, como ' +
+      'archivo para descargar (`<folio>.json`): datos del reporte, URLs ' +
+      'con su riesgo, evidencias con su SHA-256 e historial. Solo reportes ' +
+      'VALIDADO o CANALIZADO. El denunciante solo va cuando exporta ' +
+      'Administrador u Owner.',
+  })
+  @ApiParam(ID_PARAM)
+  @ApiOkResponse({ type: ReportExportDto })
+  @ApiForbiddenResponse({
+    description: 'Rol sin acceso',
+    type: ErrorResponseDto,
+  })
+  @ApiNotFoundResponse({
+    description: 'Reporte no encontrado',
+    type: ErrorResponseDto,
+  })
+  @ApiConflictResponse({
+    description: 'El reporte todavía no está validado',
+    type: ErrorResponseDto,
+  })
+  async export(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    // `passthrough` deja que Nest siga serializando lo que regresa el
+    // método; `res` solo se usa para el encabezado.
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ReportExportDto> {
+    const dto = await this.service.export(user, id);
+    // `attachment` hace que el navegador lo guarde como archivo en vez de
+    // mostrarlo.
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${dto.folio}.json"`,
+    );
+    return dto;
   }
 
   @Patch(':id')

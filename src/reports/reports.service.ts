@@ -5,7 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { unlink } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { JwtPayload } from '../auth/jwt';
 import { UsersRepository } from '../auth/users.repository';
@@ -13,6 +14,7 @@ import { POLICE_VISIBLE_STATUSES, ROLES } from '../common/constants';
 import { RiskService } from '../risk/risk.service';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateReportDto } from './dto/create-report.dto';
+import { EXPORT_FORMAT, ReportExportDto } from './dto/report-export.dto';
 import { ReportFiltersDto } from './dto/report-filters.dto';
 import {
   ReporterDto,
@@ -244,6 +246,71 @@ export class ReportsService {
   }
 
   /**
+   * Arma el expediente de un reporte verificado en el formato estandarizado
+   * con el que se canaliza a la Policía Cibernética.
+   *
+   * @param user - Payload del access token.
+   * @param id - `id_reporte`.
+   * @returns El expediente: datos del reporte, URLs con su riesgo, evidencias
+   * con su huella SHA-256 e historial. El denunciante solo va cuando exporta
+   * Administrador u Owner.
+   * @throws {@link NotFoundException} si no existe o el rol no lo puede ver.
+   * @throws {@link ConflictException} si el reporte no está VALIDADO ni
+   * CANALIZADO: solo se exportan reportes verificados.
+   */
+  async export(user: JwtPayload, id: number): Promise<ReportExportDto> {
+    const report = await this.findVisible(user, id);
+    if (!POLICE_VISIBLE_STATUSES.includes(report.status!)) {
+      throw new ConflictException(
+        'El reporte está en ' +
+          report.status +
+          ': solo se exportan reportes VALIDADO o CANALIZADO',
+      );
+    }
+    const [urls, evidence, history] = await Promise.all([
+      this.repository.findUrlDetails(id),
+      this.repository.findEvidenceDetails(id),
+      this.repository.findHistory(id),
+    ]);
+    const dto = new ReportExportDto();
+    dto.format = EXPORT_FORMAT;
+    dto.folio = folio(report);
+    dto.generatedAt = new Date().toISOString();
+    dto.generatedBy = { id: user.sub, role: user.role };
+    dto.report = {
+      id: report.id!,
+      status: report.status!,
+      riskLevel: report.riskLevel!,
+      fraudType: report.fraudType!,
+      description: report.description!,
+      incidentDate: report.incidentDate!.toISOString(),
+      createdAt: report.createdAt!.toISOString(),
+    };
+    // Misma regla que en `findOne`: la Policía no recibe al denunciante.
+    if (user.role === ROLES.ADMIN || user.role === ROLES.OWNER) {
+      const reporter = await this.users.findById(report.ownerId!);
+      if (reporter) dto.reporter = ReporterDto.fromEntity(reporter);
+    }
+    dto.urls = urls.map((u) => ({
+      url: u.url,
+      riskLevel: u.riskLevel,
+      certificateStatus: u.certificateStatus,
+      lastEvaluatedAt: u.lastEvaluatedAt?.toISOString(),
+    }));
+    dto.evidence = await Promise.all(
+      evidence.map(async (e) => ({
+        fileName: e.fileName,
+        path: '/uploads/' + e.fileName,
+        mimeType: e.mimeType,
+        uploadedAt: e.uploadedAt.toISOString(),
+        sha256: await sha256(e.fileName),
+      })),
+    );
+    dto.history = history.map((h) => ReportHistoryDto.fromEntity(h));
+    return dto;
+  }
+
+  /**
    * Asocia al reporte un archivo de evidencia que Multer ya dejó en
    * `uploads/`.
    *
@@ -304,6 +371,30 @@ export class ReportsService {
       );
     }
     return report;
+  }
+}
+
+/**
+ * Folio del expediente: `ZS-<año de creación>-<id_reporte a 6 dígitos>`.
+ */
+function folio(report: Report): string {
+  const year = report.createdAt!.getFullYear();
+  return `ZS-${year}-${String(report.id).padStart(6, '0')}`;
+}
+
+/**
+ * Huella SHA-256 de un archivo de evidencia. Quien recibe el expediente
+ * puede recalcularla sobre el archivo y comprobar que es el mismo.
+ *
+ * @param fileName - Nombre del archivo dentro de `uploads/`.
+ * @returns El hash en hexadecimal, o `undefined` si el archivo ya no está.
+ */
+async function sha256(fileName: string): Promise<string | undefined> {
+  try {
+    const content = await readFile(join(process.cwd(), 'uploads', fileName));
+    return createHash('sha256').update(content).digest('hex');
+  } catch {
+    return undefined;
   }
 }
 

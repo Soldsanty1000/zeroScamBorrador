@@ -19,6 +19,22 @@ const FROM =
   'Reporte r JOIN Estado e ON e.id_estado = r.id_estado ' +
   'JOIN TipoFraude t ON t.id_tipo_fraude = r.id_tipo_fraude';
 
+/** Una URL de un reporte con el riesgo que tiene en `SitioWeb_URL`. */
+export interface ReportUrlDetail {
+  url: string;
+  riskLevel: string;
+  certificateStatus: string | undefined;
+  lastEvaluatedAt: Date | undefined;
+}
+
+/** Una fila de `Evidencia`. */
+export interface ReportEvidenceDetail {
+  /** `ruta_archivo`: nombre del archivo dentro de uploads/. */
+  fileName: string;
+  mimeType: string;
+  uploadedAt: Date;
+}
+
 /** Filtros de {@link ReportsRepository.findAll}; los ausentes no filtran. */
 export interface ReportQuery {
   ownerId?: string;
@@ -111,6 +127,44 @@ export class ReportsRepository {
       entry.changedAt = row.fecha_cambio;
       return entry;
     });
+  }
+
+  /**
+   * URLs de un reporte con su riesgo global y el estado de su certificado,
+   * para el expediente que se exporta.
+   *
+   * @param id - `id_reporte`.
+   */
+  async findUrlDetails(id: number): Promise<ReportUrlDetail[]> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT s.url_texto, s.nivel_riesgo_global, s.estado_certificado, s.fecha_ultima_evaluacion
+       FROM Reporte_URL ru JOIN SitioWeb_URL s ON s.id_url = ru.id_url
+       WHERE ru.id_reporte = ${id} ORDER BY ru.fecha_asociacion, s.id_url`,
+    );
+    return rows.map((row) => ({
+      url: row.url_texto,
+      riskLevel: row.nivel_riesgo_global,
+      certificateStatus: row.estado_certificado ?? undefined,
+      lastEvaluatedAt: row.fecha_ultima_evaluacion ?? undefined,
+    }));
+  }
+
+  /**
+   * Evidencias de un reporte con su tipo y fecha de carga, para el
+   * expediente que se exporta.
+   *
+   * @param id - `id_reporte`.
+   */
+  async findEvidenceDetails(id: number): Promise<ReportEvidenceDetail[]> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT ruta_archivo, tipo_archivo, fecha_carga FROM Evidencia
+       WHERE id_reporte = ${id} ORDER BY fecha_carga, id_evidencia`,
+    );
+    return rows.map((row) => ({
+      fileName: row.ruta_archivo,
+      mimeType: row.tipo_archivo,
+      uploadedAt: row.fecha_carga,
+    }));
   }
 
   /**

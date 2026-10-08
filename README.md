@@ -81,6 +81,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | POST   | `/reports`                 | Usuario              | Crea un reporte (`fraudTypeId`, `description`, `incidentDate`, `urls` ≥ 1) |
 | GET    | `/reports`                 | cualquiera           | Lista según el rol (`?status=&fraudTypeId=&from=&to=&q=&userId=`) |
 | GET    | `/reports/:id`             | cualquiera           | Detalle con `history`; Admin/Owner reciben también `reporter` |
+| GET    | `/reports/:id/export`      | Admin, Owner, Policia | Descarga el expediente (`<folio>.json`) de un reporte VALIDADO o CANALIZADO, para canalizarlo |
 | PATCH  | `/reports/:id`             | Usuario (dueño)      | Edita mientras esté en RECIBIDO; `urls` reemplaza a las anteriores |
 | DELETE | `/reports/:id`             | Usuario (dueño)      | Borra mientras esté en RECIBIDO, con sus evidencias |
 | POST   | `/reports/:id/evidence`    | Usuario (dueño)      | Sube un archivo de evidencia (multipart, campo `file`) |
