@@ -68,6 +68,7 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | Método | Ruta                       | Rol                  | Qué hace |
 |--------|----------------------------|----------------------|----------|
 | GET    | `/`                        | —                    | Comprueba que el servidor responde (`Hello World!`) |
+| GET    | `/health`                  | —                    | Estado del servicio para el monitor: 200 si la base responde, 503 si no |
 | GET    | `/catalogs`                | —                    | Tipos de fraude, estados, niveles de riesgo y roles |
 | POST   | `/auth/register`           | —                    | Crea un usuario (`name`, `lastName`, `country`, `email`, `password` ≥ 8 con un carácter especial, `acceptsPrivacy: true`) |
 | POST   | `/auth/login`              | —                    | Regresa `accessToken` (15 min) y `refreshToken` (7 días). 403 si la cuenta está suspendida |
@@ -239,6 +240,7 @@ src/
 ├── risk/                consulta y análisis de riesgo por URL
 ├── stats/               estadísticas
 ├── catalogs/            catálogos para la app
+├── health/              estado del servicio para el monitoreo
 └── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)
 db/schema.sql            modelo físico de ZeroScam + catálogos y cuentas de prueba
 ```
