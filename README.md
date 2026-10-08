@@ -41,6 +41,8 @@ recarga cuando cambia algo en `src/`.
 |------------------|-------------------------------------|--------------------------------------------|
 | `DATABASE_URL`   | `.env` (ver `.env.example`)         | Cadena de conexión a MySQL (base `ZeroScam`) |
 | `SAFE_BROWSING_API_KEY` | `.env` (opcional)            | Llave de Google Safe Browsing para las listas negras de `/risk/analyze` |
+| `SMTP_URL`       | `.env` (opcional)                   | Servidor de correo para el código de dos pasos, p. ej. `smtp://localhost:1025` |
+| `MAIL_FROM`      | `.env` (opcional)                   | Remitente de esos correos |
 | `SECRET`         | `src/auth/jwt.ts`                   | Llave HMAC con la que se firman los tokens |
 
 `DATABASE_URL` va en `.env`, que no se sube a git: cada quien pone la de su
@@ -272,8 +274,25 @@ afectada y la evidencia solo llegan al autor y a quien modera.
 **Verificación en dos pasos.** Si la cuenta la tiene encendida,
 `POST /auth/login` responde `{ twoFactorRequired: true, challengeId,
 destination, expiresAt }` en vez de tokens. El código de 6 dígitos dura 5
-minutos y admite 3 intentos. Todavía no hay servidor de correo: el código se
-imprime en la consola del servidor (`Código de verificación para ...`).
+minutos, admite 3 intentos y se manda al correo registrado.
+
+El correo sale por SMTP al servidor de `SMTP_URL`, sin pasar por internet.
+Para desarrollo y para la red del equipo se usa
+[Mailpit](https://mailpit.axllent.org) en la misma máquina que la API: recibe
+cualquier correo, sea cual sea el dominio, y lo muestra en una página web.
+
+```bash
+brew install mailpit
+# SMTP solo para esta máquina; la página, con usuario y contraseña
+htpasswd -cbB mailpit-auth USUARIO CONTRASEÑA
+mailpit --smtp 127.0.0.1:1025 --listen 0.0.0.0:8025 --ui-auth-file mailpit-auth
+```
+
+y en `.env`: `SMTP_URL=smtp://localhost:1025`. Los códigos se leen en
+`http://<ip>:8025`. Sin `SMTP_URL` el código se imprime en la consola del
+servidor (`Código de verificación para ...`). Si hay `SMTP_URL` pero el
+servidor de correo no responde, el login contesta 503 y no se crea el
+desafío.
 
 **Eliminar la cuenta.** Los reportes ya públicos se quedan, anónimos y sin
 evidencia ni persona afectada; lo demás se borra. La fila de `Usuario` queda

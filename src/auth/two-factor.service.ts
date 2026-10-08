@@ -7,6 +7,7 @@ import {
 } from 'node:crypto';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
+import { MailService } from './mail.service';
 
 const CODE_TTL_SECONDS = 5 * 60;
 const MAX_ATTEMPTS = 3;
@@ -15,7 +16,7 @@ const MAX_ATTEMPTS = 3;
 export interface TwoFactorChallenge {
   twoFactorRequired: true;
   challengeId: string;
-  /** Correo enmascarado al que se "mandó" el código. */
+  /** Correo enmascarado al que se mandó el código. */
   destination: string;
   /** ISO 8601. */
   expiresAt: string;
@@ -25,13 +26,16 @@ export interface TwoFactorChallenge {
  * Verificación en dos pasos del login (`Desafio_DosPasos`).
  *
  * El código de 6 dígitos vive 5 minutos y admite 3 intentos. En la base se
- * guarda su hash, no el código. Todavía no hay servidor de correo: el código
- * se escribe en la consola del servidor, que es donde lo lee quien opera la
- * demo.
+ * guarda su hash, no el código. El código se manda al correo registrado por
+ * {@link MailService}; si no hay servidor de correo configurado (`SMTP_URL`),
+ * se escribe en la consola del servidor.
  */
 @Injectable()
 export class TwoFactorService {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(DB_POOL) private readonly pool: Pool,
+    private readonly mail: MailService,
+  ) {}
 
   /** Dice si la cuenta tiene encendida la verificación en dos pasos. */
   async isEnabled(userId: string): Promise<boolean> {
@@ -63,7 +67,13 @@ export class TwoFactorService {
       'INSERT INTO Desafio_DosPasos (id_desafio, id_usuario, codigo_hash, expira) VALUES (?, ?, ?, ?)',
       [id, userId, sha256(code), expires],
     );
-    console.log('Código de verificación para ' + email + ': ' + code);
+    try {
+      await this.mail.sendCode(email, code, CODE_TTL_SECONDS / 60);
+    } catch (err) {
+      // Un desafío cuyo código nunca llegó no sirve: se retira.
+      await this.remove(id);
+      throw err;
+    }
     return {
       twoFactorRequired: true,
       challengeId: id,
