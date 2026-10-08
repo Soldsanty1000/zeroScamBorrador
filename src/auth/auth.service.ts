@@ -11,6 +11,9 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { sign, verify } from './jwt';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { VerifyCodeDto } from './dto/verify-code.dto';
+import { TwoFactorChallenge, TwoFactorService } from './two-factor.service';
 import { UsersRepository } from './users.repository';
 
 const ACCESS_TTL = 15 * 60; // 15 minutos
@@ -21,7 +24,11 @@ const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 días
  */
 @Injectable()
 export class AuthService {
-  constructor(private readonly users: UsersRepository) {}
+  constructor(
+    private readonly users: UsersRepository,
+    private readonly twoFactor: TwoFactorService,
+    private readonly analytics: AnalyticsService,
+  ) {}
 
   /**
    * Registra un usuario nuevo guardando el hash de su password.
@@ -60,14 +67,18 @@ export class AuthService {
    * Valida credenciales y emite un par de tokens.
    *
    * @param dto - Email y password.
-   * @returns Un `accessToken` de 15 minutos y un `refreshToken` de 7 días.
+   * @returns Un `accessToken` de 15 minutos y un `refreshToken` de 7 días; o,
+   * si la cuenta tiene verificación en dos pasos, el desafío que se canjea en
+   * `POST /auth/two-factor/verify`.
    * @throws {@link UnauthorizedException} si el usuario no existe o el
    * password no coincide.
    * @throws {@link ForbiddenException} si la cuenta está suspendida (RF03).
    */
   async login(
     dto: LoginDto,
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+  ): Promise<
+    { accessToken: string; refreshToken: string } | TwoFactorChallenge
+  > {
     const user = await this.users.findByEmail(dto.email!);
     if (!user) {
       throw new UnauthorizedException('El usuario no existe');
@@ -81,6 +92,11 @@ export class AuthService {
     if (user.accountStatus !== 'ACTIVO') {
       throw new ForbiddenException('La cuenta está suspendida');
     }
+    // Con verificación en dos pasos el password no basta: los tokens se
+    // entregan hasta que llegue el código.
+    if (await this.twoFactor.isEnabled(user.id!)) {
+      return this.twoFactor.createChallenge(user.id!, user.email!);
+    }
     // Dos tokens con los mismos datos y distinta vida: el access viaja en cada
     // request, así que dura poco por si se filtra; el refresh solo va a
     // /auth/refresh y dura más para no pedir el password cada 15 minutos.
@@ -89,7 +105,32 @@ export class AuthService {
     const accessToken = sign({ ...claims, type: 'access' }, ACCESS_TTL);
     const refreshToken = sign({ ...claims, type: 'refresh' }, REFRESH_TTL);
     console.log('Login de ' + user.email + ': ' + accessToken);
+    await this.analytics.count('inicio_sesion', user.id!);
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * Segundo paso del login: canjea el código del desafío por los tokens.
+   *
+   * @param dto - `challengeId` que regresó el login y el código de 6 dígitos.
+   * @returns Un `accessToken` de 15 minutos y un `refreshToken` de 7 días.
+   * @throws {@link UnauthorizedException} si el código no es válido o expiró,
+   * o si la cuenta dejó de estar activa mientras tanto.
+   */
+  async verifyCode(
+    dto: VerifyCodeDto,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const userId = await this.twoFactor.verify(dto.challengeId!, dto.code!);
+    const user = await this.users.findById(userId);
+    if (!user || user.accountStatus !== 'ACTIVO') {
+      throw new UnauthorizedException('El código no es válido o ya expiró');
+    }
+    const claims = { sub: user.id!, email: user.email!, role: user.role! };
+    await this.analytics.count('inicio_sesion', user.id!);
+    return {
+      accessToken: sign({ ...claims, type: 'access' }, ACCESS_TTL),
+      refreshToken: sign({ ...claims, type: 'refresh' }, REFRESH_TTL),
+    };
   }
 
   /**

@@ -3,6 +3,12 @@
 CREATE DATABASE IF NOT EXISTS ZeroScam;
 USE ZeroScam;
 
+DROP TABLE IF EXISTS Analitica_Evento;
+DROP TABLE IF EXISTS Desafio_DosPasos;
+DROP TABLE IF EXISTS Comentario;
+DROP TABLE IF EXISTS Reporte_Confirmacion;
+DROP TABLE IF EXISTS Reporte_Guardado;
+DROP TABLE IF EXISTS Persona_Afectada;
 DROP TABLE IF EXISTS Notificacion_Alerta;
 DROP TABLE IF EXISTS Historial_Estado;
 DROP TABLE IF EXISTS Reporte_URL;
@@ -40,6 +46,16 @@ CREATE TABLE Usuario (
   estado_cuenta      VARCHAR(20)  NOT NULL DEFAULT 'ACTIVO' COMMENT 'ACTIVO, SUSPENDIDO',
   fecha_registro     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   fecha_consentimiento DATETIME   NULL COMMENT 'Aceptación del aviso de privacidad (RNF07); NULL en las cuentas de arranque',
+  -- Perfil y preferencias de la app de iOS.
+  alias                VARCHAR(20)  NULL UNIQUE COMMENT 'Nombre público; NULL = usuario<id>',
+  biografia            VARCHAR(300) NOT NULL DEFAULT '',
+  avatar_archivo       VARCHAR(100) NULL COMMENT 'Archivo dentro de storage/avatars/',
+  pref_notificaciones  BOOLEAN      NOT NULL DEFAULT FALSE,
+  pref_modo_oscuro     BOOLEAN      NOT NULL DEFAULT TRUE,
+  pref_dos_pasos       BOOLEAN      NOT NULL DEFAULT FALSE,
+  pref_perfil_publico  BOOLEAN      NOT NULL DEFAULT FALSE,
+  pref_analiticas      BOOLEAN      NOT NULL DEFAULT TRUE,
+  version_aviso        VARCHAR(10)  NULL COMMENT 'Versión del aviso de privacidad aceptada',
   FOREIGN KEY (id_rol) REFERENCES Rol(id_rol)
 );
 
@@ -58,6 +74,13 @@ CREATE TABLE Reporte (
   fecha_incidente       DATETIME    NOT NULL,
   nivel_riesgo_asignado VARCHAR(20) NOT NULL DEFAULT 'NO_EVALUADO',
   fecha_creacion        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Lo que captura el formulario de la app de iOS.
+  titulo           VARCHAR(120) NULL,
+  ciudad           VARCHAR(60)  NULL,
+  es_anonimo       BOOLEAN      NOT NULL DEFAULT FALSE,
+  afectado         VARCHAR(20)  NOT NULL DEFAULT 'YO' COMMENT 'YO, OTRA_PERSONA',
+  tipo_otro        VARCHAR(50)  NULL COMMENT 'Lo que escribió cuando el tipo es Otro',
+  texto_sospechoso TEXT         NULL COMMENT 'Mensaje o texto del fraude cuando no hay URL',
   FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
   FOREIGN KEY (id_tipo_fraude) REFERENCES TipoFraude(id_tipo_fraude),
   FOREIGN KEY (id_estado) REFERENCES Estado(id_estado),
@@ -133,6 +156,63 @@ CREATE TABLE Notificacion_Alerta (
   FOREIGN KEY (id_url) REFERENCES SitioWeb_URL(id_url)
 );
 
+-- Tablas de la app de iOS: persona afectada, guardados, "Yo también",
+-- comentarios, verificación en dos pasos y analíticas.
+CREATE TABLE Persona_Afectada (
+  id_reporte BIGINT       PRIMARY KEY,
+  nombre     VARCHAR(100) NOT NULL,
+  contacto   VARCHAR(150) NOT NULL,
+  autorizo   BOOLEAN      NOT NULL DEFAULT FALSE,
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte) ON DELETE CASCADE
+);
+
+CREATE TABLE Reporte_Guardado (
+  id_usuario BIGINT   NOT NULL,
+  id_reporte BIGINT   NOT NULL,
+  fecha      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_usuario, id_reporte),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte) ON DELETE CASCADE
+);
+
+-- "Yo también": una confirmación por usuario y reporte.
+CREATE TABLE Reporte_Confirmacion (
+  id_usuario BIGINT   NOT NULL,
+  id_reporte BIGINT   NOT NULL,
+  fecha      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_usuario, id_reporte),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte) ON DELETE CASCADE
+);
+
+CREATE TABLE Comentario (
+  id_comentario BIGINT       AUTO_INCREMENT PRIMARY KEY,
+  id_reporte    BIGINT       NOT NULL,
+  id_usuario    BIGINT       NOT NULL,
+  texto         VARCHAR(500) NOT NULL,
+  fecha         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte) ON DELETE CASCADE,
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  INDEX idx_comentario_reporte (id_reporte)
+);
+
+-- Código pendiente de la verificación en dos pasos. Se guarda su hash, no el
+-- código; a los 3 intentos fallidos la fila se borra.
+CREATE TABLE Desafio_DosPasos (
+  id_desafio  CHAR(64)  PRIMARY KEY,
+  id_usuario  BIGINT    NOT NULL,
+  codigo_hash CHAR(64)  NOT NULL,
+  expira      DATETIME  NOT NULL,
+  intentos    INT       NOT NULL DEFAULT 0,
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario)
+);
+
+-- Contadores anónimos de uso: un total por evento, sin id de usuario.
+CREATE TABLE Analitica_Evento (
+  nombre VARCHAR(50) PRIMARY KEY,
+  total  BIGINT      NOT NULL DEFAULT 0
+);
+
 INSERT INTO Rol (nombre_rol, descripcion) VALUES
 ('Usuario', 'Usuario estándar de la plataforma que realiza reportes.'),
 ('Administrador', 'Personal encargado de revisar y validar los reportes.'),
@@ -152,7 +232,14 @@ INSERT INTO TipoFraude (nombre_tipo, descripcion) VALUES
 ('Robo de Identidad', 'Uso no autorizado de los datos personales de un usuario.'),
 ('Fraude de Inversión / Cripto', 'Esquemas Ponzi o falsas promesas de altos rendimientos financieros.'),
 ('Ransomware / Extorsión', 'Secuestro de datos o amenazas cibernéticas a cambio de dinero.'),
-('Fraude Telefónico (Vishing)', 'Llamadas fraudulentas simulando ser bancos o instituciones oficiales.');
+('Fraude Telefónico (Vishing)', 'Llamadas fraudulentas simulando ser bancos o instituciones oficiales.'),
+-- Tipos que usa la app de iOS.
+('Oferta Falsa', 'Descuentos irreales y liquidaciones que nunca llegan.'),
+('Sorteo Falso', 'Concursos y premios falsos que piden datos o dinero.'),
+('Tienda Clonada', 'Sitios que imitan marcas conocidas para robar el pago.'),
+('Marketplace', 'Vendedores falsos en redes que cobran y no entregan.'),
+('Llamada', 'Llamadas y mensajes que se hacen pasar por bancos o autoridades.'),
+('Otro', 'Otro tipo de engaño; el detalle va en Reporte.tipo_otro.');
 
 -- Cuentas de arranque para probar cada rol. Password de las tres: ZeroScam123!
 -- (hash SHA-256 en hex, igual que AuthService). Cámbienlas fuera de desarrollo.

@@ -58,3 +58,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Evidencias subidas por los usuarios
 /uploads
+
+# Avatares de la app (solo salen por GET /account/avatar/:id)
+/storage

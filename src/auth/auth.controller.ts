@@ -34,6 +34,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import { VerifyCodeDto } from './dto/verify-code.dto';
 import type { JwtPayload } from './jwt';
 
 @ApiTags('auth')
@@ -67,7 +68,9 @@ export class AuthController {
     summary: 'Iniciar sesión',
     description:
       'Regresa un `accessToken` (15 min) para mandar como Bearer y un ' +
-      '`refreshToken` (7 días) para `POST /auth/refresh`.',
+      '`refreshToken` (7 días) para `POST /auth/refresh`. Si la cuenta tiene ' +
+      'verificación en dos pasos regresa `twoFactorRequired: true` con un ' +
+      '`challengeId`, sin tokens: se canjea en `POST /auth/two-factor/verify`.',
   })
   @ApiOkResponse({ type: LoginResponseDto })
   @ApiBadRequestResponse({
@@ -84,6 +87,27 @@ export class AuthController {
   })
   login(@Body() dto: LoginDto) {
     return this.service.login(dto);
+  }
+
+  @Post('two-factor/verify')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Segundo paso del login',
+    description:
+      'Canjea el `challengeId` del login y el código de 6 dígitos por los ' +
+      'tokens. El código dura 5 minutos y admite 3 intentos.',
+  })
+  @ApiOkResponse({ type: LoginResponseDto })
+  @ApiBadRequestResponse({
+    description: 'Body inválido',
+    type: ValidationErrorResponseDto,
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Código incorrecto, expirado o sin intentos',
+    type: ErrorResponseDto,
+  })
+  verifyCode(@Body() dto: VerifyCodeDto) {
+    return this.service.verifyCode(dto);
   }
 
   @Post('refresh')

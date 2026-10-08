@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { AccountModule } from './account/account.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { CatalogsModule } from './catalogs/catalogs.module';
+import { CommunityModule } from './community/community.module';
 import { HealthModule } from './health/health.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
@@ -19,6 +21,8 @@ import { UsersModule } from './users/users.module';
     RiskModule,
     StatsModule,
     CatalogsModule,
+    AccountModule,
+    CommunityModule,
     HealthModule,
   ],
   controllers: [AppController],

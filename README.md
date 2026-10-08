@@ -226,6 +226,71 @@ ALTER TABLE Notificacion_Alerta
    [swift-openapi-generator](https://github.com/apple/swift-openapi-generator)
    en vez de escribirlos a mano.
 
+## Rutas de la app de iOS
+
+La app [0Fraude](https://github.com/alexrodrd/0Fraude-SwiftUI) usa las rutas
+de arriba para sesión, notificaciones y moderación, y estas para lo que solo
+existe en la app. Todas piden Bearer salvo `POST /account/register`. El
+detalle de cada body está en `/docs` (tags `account` y `community`).
+
+| Método | Ruta | Qué hace |
+|--------|------|----------|
+| POST   | `/auth/two-factor/verify`            | Segundo paso del login: `challengeId` + `code` → tokens |
+| POST   | `/account/register`                  | Registro con `alias` (nombre público, único) |
+| GET    | `/account`                           | Mi cuenta: perfil, alias, biografía, preferencias y consentimiento |
+| PATCH  | `/account`                           | Edita mi perfil; cambiar el email pide `currentPassword` |
+| PATCH  | `/account/preferences`               | Preferencias; apagar `twoStep` pide `password` |
+| POST   | `/account/avatar`                    | Sube mi avatar (`multipart/form-data`, campo `file`, JPEG ≤ 5 MB) |
+| DELETE | `/account/avatar`                    | Quita mi avatar |
+| GET    | `/account/avatar/:id`                | Avatar de una cuenta (propio, de perfil público, o cualquiera si moderas) |
+| GET    | `/account/export`                    | Descargar mis datos |
+| DELETE | `/account`                           | Elimina mi cuenta; pide `password` |
+| GET    | `/account/users`                     | Cuentas con su perfil de la app (Administrador, Owner) |
+| GET    | `/account/analytics`                 | Contadores anónimos de uso (Owner) |
+| GET    | `/community/reports`                 | `scope=feed` (públicos, con `q`, `types`, `minRisk`), `mine`, `saved` o `queue` |
+| GET    | `/community/reports/:id`             | Detalle según quién mira |
+| POST   | `/community/reports`                 | Crea un reporte con el formulario de la app (máx. 10 por día) |
+| PATCH  | `/community/reports/:id`             | Edita uno propio en RECIBIDO o EN_REVISION |
+| DELETE | `/community/reports/:id`             | Borra uno propio, o cualquiera si moderas |
+| POST   | `/community/reports/:id/evidence`    | Adjunta JPEG (5 MB) o PDF (10 MB); máx. 3 |
+| GET    | `/community/evidence/:id`            | Baja una evidencia (autor o quien modera) |
+| PUT / DELETE | `/community/reports/:id/saved` | Guarda o quita de mis guardados |
+| POST   | `/community/reports/:id/confirmations` | "Yo también" |
+| GET / POST | `/community/reports/:id/comments` | Comentarios (máx. 5 por minuto) |
+| DELETE | `/community/comments/:id`            | Borra un comentario propio, o cualquiera si moderas |
+| GET    | `/community/reports/:id/history`     | Historial de estados (autor o quien modera) |
+| GET    | `/community/stats`                   | Números de la comunidad |
+| GET    | `/community/categories`              | Reportes públicos por tipo de fraude |
+
+Qué ve cada quien en `/community`: un reporte es visible si está VALIDADO o
+CANALIZADO, si es propio, o si quien mira es Administrador u Owner; si no,
+404. El autor aparece como su alias solo si tiene perfil público (o para
+quien modera); si no, "Miembro de la comunidad" o "Anónimo". La persona
+afectada y la evidencia solo llegan al autor y a quien modera.
+
+**Verificación en dos pasos.** Si la cuenta la tiene encendida,
+`POST /auth/login` responde `{ twoFactorRequired: true, challengeId,
+destination, expiresAt }` en vez de tokens. El código de 6 dígitos dura 5
+minutos y admite 3 intentos. Todavía no hay servidor de correo: el código se
+imprime en la consola del servidor (`Código de verificación para ...`).
+
+**Eliminar la cuenta.** Los reportes ya públicos se quedan, anónimos y sin
+evidencia ni persona afectada; lo demás se borra. La fila de `Usuario` queda
+vacía con `estado_cuenta = 'ELIMINADA'` porque historial y comentarios la
+referencian.
+
+**Base ya creada.** Las columnas y tablas de la app se agregan sin borrar
+datos con:
+
+```bash
+mysql -u root -p ZeroScam < db/migracion-app.sql
+```
+
+**Apuntar la app al servidor.** En Xcode, target PrototipoApp → Build
+Settings: `ZS_FUENTE_DATOS = remote` y `ZS_URL_BASE = http://<ip>:3000`. La
+app solo acepta HTTP hacia `localhost` o una IPv4 privada; cualquier otra URL
+debe ser HTTPS.
+
 ## Estructura
 
 ```
@@ -242,6 +307,10 @@ src/
 ├── stats/               estadísticas
 ├── catalogs/            catálogos para la app
 ├── health/              estado del servicio para el monitoreo
+├── account/             cuenta de la app: perfil, preferencias, avatar
+├── community/           reportes vistos desde la app: feed, guardados, comentarios
+├── analytics/           contadores anónimos de uso
 └── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)
 db/schema.sql            modelo físico de ZeroScam + catálogos y cuentas de prueba
+db/migracion-app.sql     agrega lo de la app de iOS a una base ya creada
 ```

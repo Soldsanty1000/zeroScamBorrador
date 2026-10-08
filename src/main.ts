@@ -31,6 +31,14 @@ async function bootstrap() {
     .addTag('risk', 'Consulta de riesgo de URLs')
     .addTag('stats', 'Estadísticas para Administrador, Owner y Policía')
     .addTag('catalogs', 'Catálogos para llenar selectores de la app')
+    .addTag(
+      'account',
+      'Cuenta de la app: perfil, preferencias, avatar y mis datos',
+    )
+    .addTag(
+      'community',
+      'Reportes vistos desde la app: feed, guardados, comentarios',
+    )
     .addTag('app', 'Salud del servidor')
     .addBearerAuth()
     .build();
