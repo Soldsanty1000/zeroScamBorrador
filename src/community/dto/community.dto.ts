@@ -10,8 +10,8 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUrl,
   Length,
+  Matches,
   MaxLength,
   ValidateIf,
   ValidateNested,
@@ -105,8 +105,14 @@ export class SaveCommunityReportDto {
     description: 'Enlace http(s) del fraude',
   })
   @IsOptional()
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  @IsString()
   @MaxLength(2048)
+  // La app ya normaliza el enlace; aquí basta con que sea una URL http(s)
+  // con servidor. Más estricto rechazaría enlaces raros que justo son los
+  // que la gente quiere reportar.
+  @Matches(/^https?:\/\/[^\s/?#@]+([/?#]\S*)?$/i, {
+    message: 'url debe ser un enlace http:// o https:// válido',
+  })
   url?: string;
 
   @ApiPropertyOptional({

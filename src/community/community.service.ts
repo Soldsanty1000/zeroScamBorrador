@@ -350,7 +350,10 @@ export class CommunityService {
     }
     const incidentDate = new Date(dto.incidentDate);
     const yearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-    if (incidentDate > new Date() || incidentDate < yearAgo) {
+    // Unos minutos de margen: el reloj del teléfono puede ir adelantado al
+    // del servidor y la app manda "ahora" por defecto.
+    const latest = new Date(Date.now() + 5 * 60 * 1000);
+    if (incidentDate > latest || incidentDate < yearAgo) {
       throw new BadRequestException(
         'La fecha no puede ser futura ni de hace más de un año.',
       );
