@@ -1,0 +1,9 @@
+# UTF-8 completo en el servidor y en el cliente `mysql`. El cliente importa:
+# con él se carga db/schema.sql al crear la base, y sin esto los acentos
+# se guardan rotos.
+[mysqld]
+character-set-server=utf8mb4
+collation-server=utf8mb4_0900_ai_ci
+
+[client]
+default-character-set=utf8mb4
