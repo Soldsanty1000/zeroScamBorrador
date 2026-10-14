@@ -1,0 +1,78 @@
+# ZeroScam completo: MySQL + API + panel de administración + Mailpit.
+#   docker compose up -d --build
+# El panel se construye desde su propio repo, clonado junto a este
+# (ver ADMIN_PATH en .env.example y DOCKER.md).
+
+services:
+  db:
+    image: mysql:8.4
+    container_name: zeroscam-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: ZeroScam
+      TZ: ${TZ:-America/Mexico_City}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/mysql.cnf:/etc/mysql/conf.d/zeroscam.cnf:ro
+      # Solo corre la primera vez, cuando el volumen está vacío
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      # Para conectarse con Workbench desde esta PC: localhost:3307
+      - "127.0.0.1:${MYSQL_PORT:-3307}:3306"
+    healthcheck:
+      # Por TCP: durante la carga inicial MySQL solo escucha por socket
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    container_name: zeroscam-mailpit
+    ports:
+      # Página con los códigos de dos pasos: http://localhost:8025
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+    restart: unless-stopped
+
+  api:
+    build: .
+    image: zeroscam-api:latest
+    container_name: zeroscam-api
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@db:3306/ZeroScam
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_FROM: ${MAIL_FROM:-}
+      SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY:-}
+      TZ: ${TZ:-America/Mexico_City}
+    volumes:
+      - uploads:/app/uploads
+      - avatars:/app/storage/avatars
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ${ADMIN_PATH:-../zeroscam-admin}
+      args:
+        # La ve el NAVEGADOR, no el contenedor: localhost = la PC del usuario
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+    image: zeroscam-admin:latest
+    container_name: zeroscam-admin
+    ports:
+      - "${ADMIN_PORT:-3001}:3001"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  uploads:
+  avatars:

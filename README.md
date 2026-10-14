@@ -14,6 +14,8 @@ Proyecto del curso **Seguridad informática** (TC2007B, Ago–Dic 2026).
 
 ## Cómo correr
 
+> **Con Docker** (MySQL + API + panel de una vez): ver [DOCKER.md](DOCKER.md).
+
 ```bash
 npm install
 cp .env.example .env               # y pon tu usuario/password de MySQL
