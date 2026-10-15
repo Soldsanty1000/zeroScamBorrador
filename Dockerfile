@@ -6,7 +6,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build
+# --offline: quitar las dependencias de desarrollo no necesita internet; sin
+# esto npm consulta el registro y se cuelga si la red es lenta o no tiene salida.
+RUN npm prune --omit=dev --offline --no-audit --no-fund
 
 # ---------- 2. Imagen final ----------
 FROM node:24-alpine AS runner
