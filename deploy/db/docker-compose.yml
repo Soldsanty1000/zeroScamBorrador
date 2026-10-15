@@ -1,0 +1,37 @@
+# PC de la BASE DE DATOS: solo MySQL.
+#   cd deploy/db
+#   copy .env.example .env   (y pon las passwords)
+#   docker compose up -d
+# Ver DESPLIEGUE.md.
+
+name: zeroscam-db
+
+services:
+  db:
+    image: mysql:8.4
+    container_name: zeroscam-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: ZeroScam
+      # Usuario con el que se conecta la API desde la PC del back.
+      MYSQL_USER: zeroscam
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Falta MYSQL_APP_PASSWORD en .env}
+      TZ: ${TZ:-America/Mexico_City}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ../../docker/mysql.cnf:/etc/mysql/conf.d/zeroscam.cnf:ro
+      # Solo corre la primera vez, cuando el volumen está vacío
+      - ../../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      # Abierto a la red; el firewall de Windows lo deja solo para la PC del back.
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  db-data:

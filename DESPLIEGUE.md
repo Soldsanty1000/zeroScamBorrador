@@ -1,90 +1,110 @@
-# Despliegue en las PCs del proyecto (Windows, sin Docker)
-
-Dos PCs de escritorio con Windows 10/11, conectadas al switch de servidores:
+# Despliegue en las PCs del proyecto (Windows + Docker Desktop)
 
 | PC | VLAN | IP | Corre |
 |---|---|---|---|
-| Base de datos | 10 · `192.168.10.0/24` | `192.168.10.10` (la que tenga) | MySQL 8.4, puerto 3306 |
-| Back | 20 · `192.168.20.10/24` | `192.168.20.10` (fija: tiene el NAT a `200.0.0.50`) | API :3000 y panel :3001 |
+| Base de datos | 10 · `192.168.10.0/24` | `192.168.10.10` | MySQL 8.4 (`deploy/db`), puerto 3306 |
+| Back | 20 · `192.168.20.0/24` | `192.168.20.10` (fija: tiene el NAT a `200.0.0.50`) | API :3000, panel :3001, Mailpit :8025 (`deploy/back`) |
 
-Los iPhones entran por la red inalámbrica (VLAN 30, `192.168.30.0/24`) y llegan al back por OSPF.
+Los iPhones entran por la Wi-Fi (VLAN 30, `192.168.30.0/24`) y llegan al back por OSPF.
 
-Todo se instala con dos scripts de `deploy/windows/`. No hace falta instalar nada a mano: descargan MySQL y Node solos (las PCs necesitan internet la primera vez).
+## 0. En las dos PCs
 
-## 0. Antes de empezar
-
-- Pon IP fija en cada PC (Configuración → Red → Ethernet → Editar asignación de IP):
-  - Base: `192.168.10.10`, máscara `255.255.255.0`, puerta `192.168.10.1`, DNS `8.8.8.8`.
-  - Back: `192.168.20.10`, máscara `255.255.255.0`, puerta `192.168.20.1`, DNS `8.8.8.8`.
-- Elige dos passwords de **solo letras y números**, mínimo 8: una para `root` de MySQL y otra para el usuario `zeroscam` (la app la usa para conectarse).
+1. **IP fija** (Configuración → Red → Ethernet → Editar asignación de IP):
+   - Base: `192.168.10.10`, máscara `255.255.255.0`, puerta `192.168.10.1`, DNS `8.8.8.8`.
+   - Back: `192.168.20.10`, máscara `255.255.255.0`, puerta `192.168.20.1`, DNS `8.8.8.8`.
+2. **Docker Desktop** instalado y abierto (la ballena en la barra de tareas en verde). En Settings → General activa *Start Docker Desktop when you sign in*. Los contenedores tienen `restart: unless-stopped`: vuelven a arrancar solos cuando Docker abre.
+3. Los comandos van en **PowerShell**. Los de firewall, en PowerShell **como administrador**.
 
 ## 1. PC de la base de datos
 
-1. Descarga este repo (público): en GitHub → **Code → Download ZIP**, y descomprímelo (por ejemplo en `Documentos`).
-2. Abre `deploy\windows` y da doble clic en **`1-base-de-datos.cmd`**. Acepta el permiso de administrador.
-3. Escribe las dos passwords.
+```powershell
+git clone https://github.com/Soldsanty1000/zeroScamBorrador.git
+cd zeroScamBorrador\deploy\db
+copy .env.example .env
+notepad .env
+```
 
-El script instala MySQL en `C:\ZeroScam\mysql` como servicio **ZeroScamDB** (arranca solo con Windows), carga `db/schema.sql` con las cuentas de prueba, crea el usuario `zeroscam` que **solo** puede entrar desde `192.168.20.10` y abre el 3306 en el firewall solo para esa IP.
-
-Si el back no tiene `192.168.20.10`, córrelo desde PowerShell como administrador con su IP:
+En `.env` pon `MYSQL_ROOT_PASSWORD` y `MYSQL_APP_PASSWORD` (solo letras y números). Sin Git: GitHub → Code → Download ZIP.
 
 ```powershell
-.\base-de-datos.ps1 -IpBack 192.168.20.25
+docker compose up -d
+docker compose ps        # espera a que diga (healthy), ~1 min la primera vez
 ```
+
+La primera vez carga `db/schema.sql` con las cuentas de prueba y crea el usuario `zeroscam`.
+
+Firewall (como administrador): 3306 solo desde la PC del back.
+
+```powershell
+New-NetFirewallRule -DisplayName "ZeroScam MySQL" -Direction Inbound -Protocol TCP -LocalPort 3306 -RemoteAddress 192.168.20.10 -Action Allow
+New-NetFirewallRule -DisplayName "ZeroScam ping" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
+```
+
+Si Windows muestra un aviso de firewall para Docker, elige **solo redes privadas** o cancela: la regla de arriba ya basta. Si aceptas para todas las redes, el 3306 queda abierto a cualquiera.
 
 ## 2. PC del back
 
-1. Pon los **dos** repos en la misma carpeta, uno junto al otro:
-   ```
-   Documentos\
-     zeroScamBorrador\      (este repo)
-     zeroscam-admin\        (el panel)
-   ```
-   El panel es privado: descárgalo en ZIP desde GitHub con una cuenta que tenga acceso, o cópialo con USB. También sirve `git clone` si la PC tiene Git.
-2. Abre `zeroScamBorrador\deploy\windows` y da doble clic en **`2-back.cmd`**.
-3. Escribe la IP de la base (Enter = `192.168.10.10`) y la password de `zeroscam`.
+Los dos repos juntos en la misma carpeta:
 
-El script instala Node 22 en `C:\ZeroScam\node`, compila la API y el panel y crea dos tareas de Windows, **ZeroScam API** y **ZeroScam Panel**, que arrancan solas al prender la PC y se reinician si se caen. Abre los puertos 3000 y 3001.
+```powershell
+git clone https://github.com/Soldsanty1000/zeroScamBorrador.git
+git clone https://github.com/Soldsanty1000/zeroscam-admin.git
+cd zeroScamBorrador\deploy\back
+copy .env.example .env
+notepad .env
+```
 
-Al final muestra:
+El panel es privado: Git pedirá iniciar sesión con una cuenta con acceso (o bájalo en ZIP y pon `ADMIN_PATH=../../../zeroscam-admin-main`).
+
+En `.env`: `DB_HOST=192.168.10.10`, `MYSQL_APP_PASSWORD` igual que en la base y `NEXT_PUBLIC_API_URL=http://192.168.20.10:3000`.
+
+```powershell
+Test-NetConnection 192.168.10.10 -Port 3306   # TcpTestSucceeded : True
+docker compose up -d --build                   # la primera vez tarda varios minutos
+docker compose ps
+```
+
+Firewall (como administrador):
+
+```powershell
+New-NetFirewallRule -DisplayName "ZeroScam API y panel" -Direction Inbound -Protocol TCP -LocalPort 3000,3001 -Action Allow
+New-NetFirewallRule -DisplayName "ZeroScam ping" -Direction Inbound -Protocol ICMPv4 -IcmpType 8 -Action Allow
+```
+
+Listo:
 
 - Panel: <http://192.168.20.10:3001>
-- API: <http://192.168.20.10:3000> (Swagger en `/docs`, estado en `/health`)
+- API: <http://192.168.20.10:3000/health> (Swagger en `/docs`)
+- Códigos de dos pasos: <http://localhost:8025> en la PC del back. Para verlos desde otra PC, `MAILPIT_BIND=0.0.0.0` en `.env`, `docker compose up -d` y abre el 8025 en el firewall.
 
 ## 3. App de iOS
 
-En Xcode, `ZS_URL_BASE = http://192.168.20.10:3000` y `ZS_FUENTE_DATOS = remote` (en Debug y Release). El iPhone debe estar en la Wi-Fi del proyecto.
+En Xcode: `ZS_URL_BASE = http://192.168.20.10:3000` y `ZS_FUENTE_DATOS = remote` (Debug y Release). El iPhone en la Wi-Fi del proyecto.
 
 No uses `http://200.0.0.50:3000`: es la IP "pública" del NAT y la app solo acepta HTTP hacia IPs privadas.
 
 ## Cuentas de prueba
 
-Las que crea `schema.sql` (password `ZeroScam123!`): `owner@zeroscam.mx`, `admin@zeroscam.mx`, `policia@zeroscam.mx`, `ana@zeroscam.mx`, `beto@zeroscam.mx`.
-
-El panel pide un código de verificación al entrar. Sin servidor de correo, el código se escribe en `C:\ZeroScam\logs\api.log` de la PC del back (solo administradores pueden leer `C:\ZeroScam`; abre PowerShell como administrador):
-
-```powershell
-Get-Content C:\ZeroScam\logs\api.log -Tail 20 -Wait
-```
+Password `ZeroScam123!`: `owner@zeroscam.mx`, `admin@zeroscam.mx`, `policia@zeroscam.mx`, `ana@zeroscam.mx`, `beto@zeroscam.mx`.
 
 ## Día a día
 
-| Quiero… | Cómo |
-|---|---|
-| Actualizar el código | Bajar la versión nueva de los repos y volver a correr `2-back.cmd`. Recompila y reinicia. |
-| Cambiar IP de la base o password | `.\back.ps1 -Reconfigurar` en PowerShell como administrador. |
-| El back cambió de IP | Volver a correr `2-back.cmd` (el panel lleva la IP de la API dentro y se recompila) y `.\base-de-datos.ps1 -IpBack <nueva>` en la base. |
-| Reiniciar API o panel | Reiniciar la PC, o volver a correr `2-back.cmd`. |
-| Ver errores | `C:\ZeroScam\logs\api.log` y `panel.log`. |
-| Borrar todo y volver a los datos de prueba | En la base: `.\base-de-datos.ps1 -Reiniciar` (**borra todos los datos**). |
-| Respaldo | En la base: `C:\ZeroScam\mysql\bin\mysqldump -uroot -p ZeroScam > respaldo.sql` |
+| Quiero… | Dónde | Comando |
+|---|---|---|
+| Actualizar el código | back | `git pull` en los dos repos y `docker compose up -d --build` en `deploy\back` |
+| Ver logs | back | `docker compose logs -f api` (o `admin`) |
+| Cambió la IP del back | back | Cambia `NEXT_PUBLIC_API_URL` y `docker compose up -d --build` (va dentro del panel) |
+| Apagar / prender | cualquiera | `docker compose down` / `docker compose up -d` (los datos se conservan) |
+| Respaldo | base | `docker exec zeroscam-db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" ZeroScam' > respaldo.sql` |
+| Borrar todo y volver a los datos de prueba | base | `docker compose down -v` y `docker compose up -d` (**borra todos los datos**) |
 
 ## Si algo falla
 
 | Síntoma | Revisa |
 |---|---|
-| `2-back.cmd` dice que no hay conexión con MySQL | Desde el back: `Test-NetConnection 192.168.10.10 -Port 3306`. Si falla, `ping 192.168.10.10`: si el ping tampoco pasa es la red (VLAN, OSPF, puerta de enlace); si el ping pasa, el servicio ZeroScamDB o el firewall de la base. |
-| La API arranca pero responde 500 | `api.log`: `Access denied` = password de `zeroscam` distinta en las dos PCs, o el back no tiene la IP que se le dio a la base. |
-| El panel abre pero no inicia sesión | Se compiló con otra IP de API. Vuelve a correr `2-back.cmd`. |
-| El iPhone no conecta | Que esté en la Wi-Fi de la VLAN 30 y que en Safari abra `http://192.168.20.10:3000/health`. |
-| Windows bloquea el `.cmd` | Clic derecho → Propiedades → Desbloquear, o "Más información → Ejecutar de todas formas". |
+| `Test-NetConnection` al 3306 falla | `ping 192.168.10.10`. Sin ping: red (VLAN, OSPF, puerta de enlace). Con ping: `docker compose ps` en la base y la regla de firewall. |
+| La API responde 500 o el log dice `Access denied` | `MYSQL_APP_PASSWORD` distinta en las dos PCs. Si cambiaste la de la base después del primer arranque, no se aplicó: `docker compose down -v` y arriba de nuevo (borra datos). |
+| El panel abre pero no inicia sesión | `NEXT_PUBLIC_API_URL` mal; corrige y `docker compose up -d --build`. |
+| `docker compose` dice que no encuentra Docker | Abre Docker Desktop y espera a que esté en verde. |
+| Docker Desktop pide WSL o virtualización | Instala WSL (`wsl --install` como administrador, reinicia) y activa la virtualización (VT-x/SVM) en la BIOS. |
+| El iPhone no conecta | Safari en el iPhone: `http://192.168.20.10:3000/health`. |

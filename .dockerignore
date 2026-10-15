@@ -16,3 +16,5 @@ docker-compose.yml
 docker
 .dockerignore
 DOCKER.md
+deploy
+DESPLIEGUE.md

@@ -1,0 +1,54 @@
+# PC del BACK: API + panel de administración + Mailpit (códigos de dos pasos).
+#   cd deploy/back
+#   copy .env.example .env   (y pon la IP de la base y la password)
+#   docker compose up -d --build
+# El panel se construye desde su repo, junto a este (ADMIN_PATH).
+# Ver DESPLIEGUE.md.
+
+name: zeroscam-back
+
+services:
+  mailpit:
+    image: axllent/mailpit:v1.27
+    container_name: zeroscam-mailpit
+    ports:
+      # Bandeja con los códigos de dos pasos: http://localhost:8025
+      - "${MAILPIT_BIND:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+    restart: unless-stopped
+
+  api:
+    build: ../..
+    image: zeroscam-api:latest
+    container_name: zeroscam-api
+    environment:
+      DATABASE_URL: mysql://zeroscam:${MYSQL_APP_PASSWORD:?Falta MYSQL_APP_PASSWORD en .env}@${DB_HOST:?Falta DB_HOST en .env}:${DB_PORT:-3306}/ZeroScam
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_FROM: ${MAIL_FROM:-}
+      SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY:-}
+      TZ: ${TZ:-America/Mexico_City}
+    volumes:
+      - uploads:/app/uploads
+      - avatars:/app/storage/avatars
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      - mailpit
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ${ADMIN_PATH:-../../../zeroscam-admin}
+      args:
+        # La usa el NAVEGADOR de quien abre el panel: va la IP de esta PC.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Falta NEXT_PUBLIC_API_URL en .env}
+    image: zeroscam-admin:latest
+    container_name: zeroscam-admin
+    ports:
+      - "${ADMIN_PORT:-3001}:3001"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  avatars:
