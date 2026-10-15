@@ -24,7 +24,7 @@ copy .env.example .env
 notepad .env
 ```
 
-En `.env` pon `MYSQL_ROOT_PASSWORD` y `MYSQL_APP_PASSWORD` (solo letras y números). Sin Git: GitHub → Code → Download ZIP.
+En `.env` pon `MYSQL_ROOT_PASSWORD` y `MYSQL_APP_PASSWORD` (solo letras y números) y en `MYSQL_BIND` la IP de esta PC. Root solo entra desde dentro del contenedor; por la red solo entra `zeroscam`. Sin Git: GitHub → Code → Download ZIP.
 
 ```powershell
 docker compose up -d
@@ -107,4 +107,5 @@ Password `ZeroScam123!`: `owner@zeroscam.mx`, `admin@zeroscam.mx`, `policia@zero
 | El panel abre pero no inicia sesión | `NEXT_PUBLIC_API_URL` mal; corrige y `docker compose up -d --build`. |
 | `docker compose` dice que no encuentra Docker | Abre Docker Desktop y espera a que esté en verde. |
 | Docker Desktop pide WSL o virtualización | Instala WSL (`wsl --install` como administrador, reinicia) y activa la virtualización (VT-x/SVM) en la BIOS. |
+| La base no arranca: `cannot assign requested address` | `MYSQL_BIND` no es la IP de esta PC (`ipconfig`). Corrígela, o pon `0.0.0.0`. |
 | El iPhone no conecta | Safari en el iPhone: `http://192.168.20.10:3000/health`. |
