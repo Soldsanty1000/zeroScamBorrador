@@ -1,23 +1,29 @@
 # syntax=docker/dockerfile:1
 
-# ---------- 1. Build ----------
+# ---------- 1. Dependencias de producción ----------
+# Se instalan aparte en vez de `npm prune` sobre las de desarrollo: prune se
+# quedaba colgado en PCs lentas, y así esta capa se reutiliza mientras no
+# cambie package-lock.json.
+FROM node:24-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# ---------- 2. Build ----------
 FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
-# --offline: quitar las dependencias de desarrollo no necesita internet; sin
-# esto npm consulta el registro y se cuelga si la red es lenta o no tiene salida.
-RUN npm prune --omit=dev --offline --no-audit --no-fund
 
-# ---------- 2. Imagen final ----------
+# ---------- 3. Imagen final ----------
 FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=builder --chown=node:node /app/package.json ./
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 
 # Evidencias y avatares: se montan como volúmenes en docker-compose.yml.
