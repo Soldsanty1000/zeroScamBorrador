@@ -65,4 +65,4 @@ function lanUrls(): string[] {
     .map((i) => 'http://' + i!.address + ':3000');
 }
 
-bootstrap();
+void bootstrap();

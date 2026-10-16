@@ -147,23 +147,38 @@ export class UsersRepository {
   }
 }
 
+/** Columnas que trae `COLUMNS`, con el tipo que regresa mysql2. */
+interface UserRow {
+  id_usuario: number | string;
+  correo_electronico: string;
+  contrasena_hash: string;
+  nombre: string;
+  apellido: string;
+  pais: string;
+  nombre_rol: string;
+  estado_cuenta: string;
+  fecha_registro: Date;
+  fecha_consentimiento: Date | null;
+}
+
 /**
  * Convierte una fila de MySQL en una entidad {@link User}.
  *
  * @param row - Fila con las columnas de `COLUMNS`.
  * @returns La entidad con los nombres de campo en camelCase.
  */
-function toEntity(row: any): User {
+function toEntity(row: RowDataPacket): User {
+  const r = row as UserRow;
   const user = new User();
-  user.id = String(row.id_usuario);
-  user.email = row.correo_electronico;
-  user.passwordHash = row.contrasena_hash;
-  user.name = row.nombre;
-  user.lastName = row.apellido;
-  user.country = row.pais;
-  user.role = row.nombre_rol;
-  user.accountStatus = row.estado_cuenta;
-  user.createdAt = row.fecha_registro;
-  user.privacyAcceptedAt = row.fecha_consentimiento ?? undefined;
+  user.id = String(r.id_usuario);
+  user.email = r.correo_electronico;
+  user.passwordHash = r.contrasena_hash;
+  user.name = r.nombre;
+  user.lastName = r.apellido;
+  user.country = r.pais;
+  user.role = r.nombre_rol;
+  user.accountStatus = r.estado_cuenta;
+  user.createdAt = r.fecha_registro;
+  user.privacyAcceptedAt = r.fecha_consentimiento ?? undefined;
   return user;
 }

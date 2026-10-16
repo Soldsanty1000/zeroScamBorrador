@@ -4,7 +4,8 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { verify } from './jwt';
+import type { Request } from 'express';
+import { JwtPayload, verify } from './jwt';
 
 /**
  * Protege rutas con un JWT de acceso.
@@ -19,8 +20,10 @@ import { verify } from './jwt';
 @Injectable()
 export class AuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const req = context.switchToHttp().getRequest();
-    const header: string = req.headers.authorization ?? '';
+    const req = context
+      .switchToHttp()
+      .getRequest<Request & { user?: JwtPayload }>();
+    const header = req.headers.authorization ?? '';
     if (!header.startsWith('Bearer ')) {
       throw new UnauthorizedException('Falta el token');
     }

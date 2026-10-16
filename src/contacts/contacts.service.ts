@@ -1,7 +1,7 @@
-/* eslint-disable @typescript-eslint/require-await */
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ContactsRepository } from './contacts.repository';
 import { ContactResponseDto } from './dto/contact-response.dto';
+import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
 
 /**
@@ -14,7 +14,7 @@ import { UpdateContactDto } from './dto/update-contact.dto';
  */
 @Injectable()
 export class ContactsService {
-  constructor(private readonly repository: ContactsRepository) { }
+  constructor(private readonly repository: ContactsRepository) {}
 
   /**
    * Crea un contacto para un usuario.
@@ -25,7 +25,10 @@ export class ContactsService {
    * base.
    * @throws `Error` con el mensaje `Agenda llena` si ya hay 100 contactos.
    */
-  async create(userId: string, data: any): Promise<ContactResponseDto> {
+  async create(
+    userId: string,
+    data: CreateContactDto,
+  ): Promise<ContactResponseDto> {
     const contact = await this.repository.save(userId, {
       name: data.name,
       email: data.email,

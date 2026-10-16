@@ -1,7 +1,6 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
+
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
@@ -19,7 +18,7 @@ const COLUMNS = 'id, owner_id, name, email, phone, notes, photo, created_at';
  */
 @Injectable()
 export class ContactsRepository {
-  constructor(@Inject(DB_POOL) private readonly pool: Pool) { }
+  constructor(@Inject(DB_POOL) private readonly pool: Pool) {}
 
   /**
    * Lista los contactos de un usuario.
@@ -61,7 +60,7 @@ export class ContactsRepository {
     ownerId: string,
     contact: Omit<Contact, 'id' | 'ownerId' | 'createdAt'>,
   ): Promise<Contact> {
-    // El tope de 100 es para toda la tabla, no por usuario 
+    // El tope de 100 es para toda la tabla, no por usuario
     // Se cuenta aquí porque MySQL no tiene una restricción de
     // "máximo de filas" que podamos declarar en el schema.
     const [count] = await this.pool.query<RowDataPacket[]>(
@@ -103,7 +102,7 @@ export class ContactsRepository {
     // ValidationPipe con `whitelist` ya quitó cualquier otra llave.
     // Ojo: si `changes` viene vacío, el SET queda vacío y MySQL rechaza la query.
     const sets = Object.entries(changes)
-      .map(([column, value]) => `${column} = '${value}'`)
+      .map(([column, value]) => `${column} = '${String(value)}'`)
       .join(', ');
     await this.pool.query(`UPDATE contacts SET ${sets} WHERE id = '${id}'`);
     return this.findById(id);

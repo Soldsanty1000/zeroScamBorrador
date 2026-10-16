@@ -1,10 +1,13 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 
 describe('Contacts (e2e)', () => {
-  let app: INestApplication;
+  let app: INestApplication<App>;
+
+  type ContactBody = { id: string; createdAt: string; notes?: string };
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -30,22 +33,23 @@ describe('Contacts (e2e)', () => {
       .post('/contacts')
       .send(valid)
       .expect(201);
-    expect(created.body.id).toBeDefined();
-    expect(created.body.createdAt).toBeDefined();
+    const body = created.body as ContactBody;
+    expect(body.id).toBeDefined();
+    expect(body.createdAt).toBeDefined();
 
     const list = await request(app.getHttpServer())
       .get('/contacts')
       .expect(200);
     expect(list.body).toHaveLength(1);
 
-    const id = created.body.id;
+    const id = body.id;
     await request(app.getHttpServer()).get(`/contacts/${id}`).expect(200);
 
     const patched = await request(app.getHttpServer())
       .patch(`/contacts/${id}`)
       .send({ notes: 'compañera de clase' })
       .expect(200);
-    expect(patched.body.notes).toBe('compañera de clase');
+    expect((patched.body as ContactBody).notes).toBe('compañera de clase');
 
     await request(app.getHttpServer()).delete(`/contacts/${id}`).expect(204);
     await request(app.getHttpServer()).get(`/contacts/${id}`).expect(404);
