@@ -22,6 +22,8 @@ services:
     container_name: zeroscam-api
     environment:
       DATABASE_URL: mysql://zeroscam:${MYSQL_APP_PASSWORD:?Falta MYSQL_APP_PASSWORD en .env}@${DB_HOST:?Falta DB_HOST en .env}:${DB_PORT:-3306}/ZeroScam
+      # Origen del panel que puede leer la API desde el navegador
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://192.168.20.10:3001}
       SMTP_URL: smtp://mailpit:1025
       MAIL_FROM: ${MAIL_FROM:-}
       SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY:-}

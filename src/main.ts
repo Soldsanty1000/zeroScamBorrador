@@ -2,13 +2,60 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import type { NextFunction, Request, Response } from 'express';
+import helmet from 'helmet';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // No anunciar "X-Powered-By: Express" (alerta de ZAP 10037).
+  app.disable('x-powered-by');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+
+  // Cabeceras de seguridad (alertas de ZAP 10038, 10020 y 10021): CSP,
+  // X-Frame-Options y nosniff. Es una API JSON: no carga nada, así que la CSP es
+  // mínima. Sin `useDefaults` helmet agregaría `style-src 'unsafe-inline'` y
+  // fuentes `https:`/`data:` que no se usan. Solo /docs (Swagger UI) lleva una
+  // política más laxa porque necesita sus propios scripts y estilos. Va antes de
+  // Swagger y de /uploads para cubrir también esas rutas.
+  const strict = helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    // El panel (otro puerto) muestra las fotos de /uploads con <img>: helmet
+    // pondría `same-origin` y el navegador las bloquearía.
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    // El servidor habla HTTP: HSTS no aplica.
+    hsts: false,
+  });
+  const forDocs = helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        fontSrc: ["'self'", 'data:'],
+        frameAncestors: ["'none'"],
+        // El laboratorio sirve /docs por http: subir los recursos a https lo rompería.
+        upgradeInsecureRequests: null,
+      },
+    },
+    hsts: false,
+  });
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    req.path.startsWith('/docs')
+      ? forDocs(req, res, next)
+      : strict(req, res, next),
+  );
 
   // Las fotos viven en uploads/ (fuera de src/). Express las sirve tal cual:
   // GET /uploads/<archivo> regresa el archivo con su Content-Type.
@@ -47,9 +94,17 @@ async function bootstrap() {
     swaggerOptions: { persistAuthorization: true },
   });
 
-  // El panel web sale de otro origen (http://localhost:3001): sin este
-  // permiso el navegador no le deja leer las respuestas de la API.
-  app.enableCors();
+  // Solo el panel puede leer las respuestas desde un navegador (alerta de ZAP
+  // 10098). CORS_ORIGINS acepta varios orígenes separados por coma; en el
+  // laboratorio es http://192.168.20.10:3001. La app de iOS no usa CORS.
+  app.enableCors({
+    origin: (
+      process.env.CORS_ORIGINS ?? 'http://localhost:3001,http://127.0.0.1:3001'
+    )
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  });
 
   // 0.0.0.0 = todas las interfaces de red, no solo localhost: así otra
   // máquina de la misma red puede abrir http://<tu-ip>:3000/uploads/...
