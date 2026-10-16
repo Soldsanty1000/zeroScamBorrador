@@ -45,6 +45,9 @@ services:
       args:
         # La usa el NAVEGADOR de quien abre el panel: va la IP de esta PC.
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Falta NEXT_PUBLIC_API_URL en .env}
+        # El panel rechaza http:// fuera de localhost en producción. El laboratorio
+        # no tiene TLS: true lo permite dentro de esa red (el Bearer va sin cifrar).
+        ALLOW_INSECURE_API_URL: ${ALLOW_INSECURE_API_URL:-false}
     image: zeroscam-admin:latest
     container_name: zeroscam-admin
     ports:

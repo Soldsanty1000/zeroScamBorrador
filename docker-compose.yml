@@ -100,6 +100,7 @@ services:
       args:
         # La ve el NAVEGADOR, no el contenedor: localhost = la PC del usuario
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+        ALLOW_INSECURE_API_URL: ${ALLOW_INSECURE_API_URL:-false}
     image: zeroscam-admin:latest
     container_name: zeroscam-admin
     init: true
