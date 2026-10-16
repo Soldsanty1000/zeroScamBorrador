@@ -1,21 +1,32 @@
 # syntax=docker/dockerfile:1
 
-# ---------- 1. Build ----------
+# ---------- 1. Dependencias de producción ----------
+# Se instalan aparte en vez de `npm prune` sobre las de desarrollo: prune se
+# quedaba colgado en PCs lentas, y así esta capa se reutiliza mientras no
+# cambie package-lock.json.
+FROM node:24-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+# Caché de npm entre builds: si cambia package-lock.json solo se descarga lo
+# nuevo, no todas las dependencias otra vez.
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --prefer-offline --no-audit --no-fund
+
+# ---------- 2. Build ----------
 FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Sin --no-audit: la construcción debe avisar de dependencias vulnerables.
-RUN npm ci --no-fund
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline --no-fund
 COPY . .
-RUN npm run build && npm audit --omit=dev --audit-level=high && npm prune --omit=dev
+RUN npm run build && npm audit --omit=dev --audit-level=high
 
-# ---------- 2. Imagen final ----------
+# ---------- 3. Imagen final ----------
 FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=builder --chown=node:node /app/package.json ./
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 # Scripts de operación (cuentas de staff) y esquema de la base.
 COPY --from=builder --chown=node:node /app/scripts ./scripts

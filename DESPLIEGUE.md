@@ -24,7 +24,7 @@ copy .env.example .env
 notepad .env
 ```
 
-En `.env` pon `MYSQL_ROOT_PASSWORD` y `MYSQL_APP_PASSWORD` (solo letras y números) y en `MYSQL_BIND` la IP de esta PC. Root solo entra desde dentro del contenedor; por la red solo entra `zeroscam`. Sin Git: GitHub → Code → Download ZIP.
+En `.env` pon `MYSQL_ROOT_PASSWORD` y `MYSQL_APP_PASSWORD` (solo letras y números) y `MYSQL_BIND=0.0.0.0` (con la IP fija puede ir `192.168.10.10`, pero en Docker Desktop a veces falla). Root solo entra desde dentro del contenedor; por la red solo entra `zeroscam`. Sin Git: GitHub → Code → Download ZIP.
 
 ```powershell
 docker compose up -d
@@ -56,7 +56,9 @@ notepad .env
 
 El panel es privado: Git pedirá iniciar sesión con una cuenta con acceso (o bájalo en ZIP y pon `ADMIN_PATH=../../../zeroscam-admin-main`).
 
-En `.env`: `DB_HOST=192.168.10.10`, `MYSQL_APP_PASSWORD` igual que en la base y `NEXT_PUBLIC_API_URL=http://192.168.20.10:3000`.
+En `.env`: `DB_HOST=192.168.10.10`, `DB_PORT` igual a `MYSQL_PORT` de la base, `MYSQL_APP_PASSWORD` idéntica a la de la base (letra por letra, incluido cualquier punto), `NEXT_PUBLIC_API_URL=http://192.168.20.10:3000` y `BIND=192.168.20.10`.
+
+Sin internet en la red del proyecto, compila **antes** de cambiarte a ella (con internet): `docker compose pull mailpit` y `docker compose build`. Ya en la red del proyecto, `docker compose up -d` **sin** `--build`. Si el build se queda en *resolving provenance*: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS=1` y vuelve a compilar.
 
 ```powershell
 Test-NetConnection 192.168.10.10 -Port 3306   # TcpTestSucceeded : True
@@ -76,6 +78,33 @@ Listo:
 - Panel: <http://192.168.20.10:3001>
 - API: <http://192.168.20.10:3000/health> (Swagger en `/docs`)
 - Códigos de dos pasos: <http://localhost:8025> en la PC del back. Para verlos desde otra PC, `MAILPIT_BIND=0.0.0.0` en `.env`, `docker compose up -d` y abre el 8025 en el firewall.
+
+## Internet en el back (Wi-Fi USB + cable del proyecto)
+
+El diagnóstico de URLs revisa certificados, antigüedad del dominio (rdap.org) y Google Safe Browsing: el back necesita internet. La red del proyecto no tiene, así que el back usa dos adaptadores: el cable para el proyecto y una Wi-Fi USB para internet. Windows no reenvía tráfico entre ellos (no hace de puente).
+
+PowerShell como administrador, con la Wi-Fi ya conectada:
+
+```powershell
+# El cable sin puerta de enlace ni DNS: internet sale por la Wi-Fi
+Remove-NetRoute -InterfaceAlias "Ethernet" -DestinationPrefix 0.0.0.0/0 -Confirm:$false
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses
+# Rutas a la base y a la Wi-Fi del proyecto por el cable
+route -p add 192.168.10.0 mask 255.255.255.0 192.168.20.1
+route -p add 192.168.30.0 mask 255.255.255.0 192.168.20.1
+# Firewall prendido; API y panel solo por el cable
+Set-NetFirewallProfile -All -Enabled True
+Get-NetFirewallRule -DisplayName "ZeroScam*" | Set-NetFirewallRule -InterfaceAlias "Ethernet"
+w32tm /resync
+```
+
+Con `BIND=192.168.20.10` en `.env`, Docker publica la API y el panel solo en el cable: desde la Wi-Fi de la escuela no responden. Comprobar que Windows no reenvía entre redes (solo debe salir `vEthernet (WSL)`):
+
+```powershell
+Get-NetIPInterface -AddressFamily IPv4 | Where-Object Forwarding -eq Enabled | Select InterfaceAlias
+```
+
+Desconecten la Wi-Fi cuando no haga falta y avisen a TI / al profesor antes de escanear el backend con otras herramientas.
 
 ## 3. App de iOS
 
@@ -107,5 +136,7 @@ Password `ZeroScam123!`: `owner@zeroscam.mx`, `admin@zeroscam.mx`, `policia@zero
 | El panel abre pero no inicia sesión | `NEXT_PUBLIC_API_URL` mal; corrige y `docker compose up -d --build`. |
 | `docker compose` dice que no encuentra Docker | Abre Docker Desktop y espera a que esté en verde. |
 | Docker Desktop pide WSL o virtualización | Instala WSL (`wsl --install` como administrador, reinicia) y activa la virtualización (VT-x/SVM) en la BIOS. |
+| `Test-NetConnection` falla y el ping da `DestinationHostUnreachable` | Router o switches sin configuración (se borra si no se guardó): `copy running-config startup-config` en los tres. |
+| La base no arranca: `Intento de acceso a un socket no permitido` | Windows tiene ocupado o reservado ese puerto. Usa otro (`MYSQL_PORT=3006`) y pon el mismo en `DB_PORT` del back y en la regla de firewall de la base. |
 | La base no arranca: `cannot assign requested address` | `MYSQL_BIND` no es la IP de esta PC (`ipconfig`). Corrígela, o pon `0.0.0.0`. |
 | El iPhone no conecta | Safari en el iPhone: `http://192.168.20.10:3000/health`. |

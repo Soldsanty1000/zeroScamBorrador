@@ -4,7 +4,8 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { verify } from './jwt';
+import type { Request } from 'express';
+import { JwtPayload, verify } from './jwt';
 import { SessionsService } from './sessions.service';
 
 /**
@@ -24,8 +25,10 @@ export class AuthGuard implements CanActivate {
   constructor(private readonly sessions: SessionsService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const req = context.switchToHttp().getRequest();
-    const header: string = req.headers.authorization ?? '';
+    const req = context
+      .switchToHttp()
+      .getRequest<Request & { user?: JwtPayload }>();
+    const header = req.headers.authorization ?? '';
     if (!header.startsWith('Bearer ')) {
       throw new UnauthorizedException('Falta el token');
     }

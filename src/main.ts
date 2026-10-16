@@ -160,4 +160,4 @@ function lanUrls(scheme: string, port: number): string[] {
     .map((i) => `${scheme}://${i!.address}:${port}`);
 }
 
-bootstrap();
+void bootstrap();

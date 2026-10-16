@@ -34,7 +34,9 @@ services:
       - uploads:/app/uploads
       - avatars:/app/storage/avatars
     ports:
-      - "${API_PORT:-3000}:3000"
+      # Solo en la IP del cable del proyecto (BIND): con la PC también en otra
+      # red (Wi-Fi para internet), la API no queda expuesta ahí.
+      - "${BIND:-0.0.0.0}:${API_PORT:-3000}:3000"
     depends_on:
       - mailpit
     restart: unless-stopped
@@ -51,7 +53,7 @@ services:
     image: zeroscam-admin:latest
     container_name: zeroscam-admin
     ports:
-      - "${ADMIN_PORT:-3001}:3001"
+      - "${BIND:-0.0.0.0}:${ADMIN_PORT:-3001}:3001"
     depends_on:
       - api
     restart: unless-stopped
