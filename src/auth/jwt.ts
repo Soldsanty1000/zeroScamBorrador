@@ -88,24 +88,27 @@ export function verify(token: string): JwtPayload | null {
   }
 
   try {
-    const head = JSON.parse(Buffer.from(header, 'base64url').toString());
-    if (head?.alg !== HEADER.alg || head?.typ !== HEADER.typ) return null;
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
+    const head = (JSON.parse(Buffer.from(header, 'base64url').toString()) ??
+      {}) as Record<string, unknown>;
+    if (head.alg !== HEADER.alg || head.typ !== HEADER.typ) return null;
+    const claims = (JSON.parse(Buffer.from(body, 'base64url').toString()) ??
+      {}) as Record<string, unknown>;
+    const { sub, email, role, type, sid, iss, exp, iat } = claims;
     if (
-      typeof payload?.sub !== 'string' ||
-      typeof payload?.email !== 'string' ||
-      typeof payload?.role !== 'string' ||
-      (payload?.type !== 'access' && payload?.type !== 'refresh') ||
-      typeof payload?.sid !== 'string' ||
-      !/^[0-9a-f]{32}$/.test(payload.sid) ||
-      payload?.iss !== ISSUER ||
-      typeof payload?.exp !== 'number' ||
-      typeof payload?.iat !== 'number'
+      typeof sub !== 'string' ||
+      typeof email !== 'string' ||
+      typeof role !== 'string' ||
+      (type !== 'access' && type !== 'refresh') ||
+      typeof sid !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(sid) ||
+      iss !== ISSUER ||
+      typeof exp !== 'number' ||
+      typeof iat !== 'number'
     ) {
       return null;
     }
-    if (payload.exp < now()) return null;
-    return payload as JwtPayload;
+    if (exp < now()) return null;
+    return claims as unknown as JwtPayload;
   } catch {
     return null;
   }
