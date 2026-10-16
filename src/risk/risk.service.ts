@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
 import { checkBlacklist } from './checks/blacklist.check';
 import { checkCertificate } from './checks/certificate.check';
@@ -8,12 +8,28 @@ import { checkDomainAge } from './checks/domain-age.check';
 import { checkHeuristics } from './checks/heuristics.check';
 import { AnalyzeResponseDto, RiskCheckDto } from './dto/analyze-response.dto';
 import { RiskResponseDto } from './dto/risk-response.dto';
-import { RiskRepository } from './risk.repository';
-import { evaluate, shouldAlert } from './scoring';
-import { hostnameOf, normalizeUrl, resolveTarget } from './target';
+import { RiskRepository, StoredEvaluation } from './risk.repository';
+import { evaluate, keepPreviousFindings, shouldAlert } from './scoring';
+import { hostnameOf, normalizeUrl, resolveTarget, redactUrl } from './target';
 
 /** Horas que un análisis guardado se regresa sin repetirlo. */
 const CACHE_HOURS = 24;
+
+/**
+ * Segundos que se regresa un análisis incompleto (`degraded`) sin repetirlo.
+ * Un servicio externo que falló suele volver en minutos; guardar esa
+ * respuesta como si fuera completa durante {@link CACHE_HOURS} horas dejaría
+ * la URL con un "BAJO" sin respaldo todo el día (y bastaría con mandarla a
+ * analizar mientras Safe Browsing tarda para que quedara así).
+ */
+const DEGRADED_CACHE_SECONDS = 5 * 60;
+
+/**
+ * Análisis que pueden estar en curso a la vez. Cada uno abre DNS, TLS, RDAP
+ * y Safe Browsing hacia afuera: sin tope, unas cuantas cuentas bastarían
+ * para llenar los sockets y la memoria del servidor.
+ */
+const MAX_CONCURRENT_ANALYSES = 10;
 
 /**
  * Días que cuenta como "reciente" haber consultado o reportado una URL para
@@ -30,6 +46,9 @@ const UNKNOWN_LEVEL = 'BAJO';
  */
 @Injectable()
 export class RiskService {
+  /** Análisis con conexiones abiertas ahora mismo. */
+  private running = 0;
+
   constructor(private readonly repository: RiskRepository) {}
 
   /**
@@ -63,7 +82,8 @@ export class RiskService {
         fraudType,
         count,
       })),
-      sites,
+      // Sin consulta ni fragmento: aquí solo se ve host y ruta (ver redactUrl).
+      sites: sites.map((site) => ({ ...site, url: redactUrl(site.url) })),
       reports,
     };
   }
@@ -73,7 +93,13 @@ export class RiskService {
    * el resultado en `SitioWeb_URL` y regresa el nivel de riesgo.
    *
    * Si la misma URL se analizó hace menos de {@link CACHE_HOURS} horas
-   * regresa lo guardado (`cached: true`) sin conectarse a nada.
+   * regresa lo guardado (`cached: true`) sin conectarse a nada. Si ese
+   * análisis quedó incompleto (`degraded: true`) solo vale
+   * {@link DEGRADED_CACHE_SECONDS} segundos: pasado ese tiempo se repite.
+   *
+   * La URL se analiza y se guarda sin cadena de consulta ni fragmento
+   * (`normalizeUrl`): dos enlaces que solo difieren en `?token=...` son el
+   * mismo análisis, y los datos de quien la recibió no salen del servidor.
    *
    * Anota la consulta del usuario y, si el análisis sube la URL a riesgo
    * alto, avisa a quienes la consultaron o reportaron (RF08).
@@ -84,16 +110,19 @@ export class RiskService {
    * `certificateStatus` es INACCESIBLE.
    * @throws {@link BadRequestException} si la URL usa un puerto distinto de
    * 80/443 o apunta a una dirección interna.
+   * @throws {@link ServiceUnavailableException} si ya hay
+   * {@link MAX_CONCURRENT_ANALYSES} análisis en curso.
    */
   async analyze(url: string, userId: string): Promise<AnalyzeResponseDto> {
-    // La llave del caché es la URL completa ya normalizada. Se busca antes
-    // de resolver el DNS, que es lo primero que tarda.
+    // La llave del caché es la URL ya normalizada (sin consulta ni
+    // fragmento). Se busca antes de resolver el DNS, que es lo primero que
+    // tarda.
     const normalized = normalizeUrl(url);
     const stored = await this.repository.findEvaluation(
       normalized.url,
       CACHE_HOURS,
     );
-    if (stored?.evaluation) {
+    if (stored?.evaluation && isReusable(stored)) {
       await this.repository.recordLookup(userId, normalized.url);
       return {
         url: normalized.url,
@@ -105,32 +134,45 @@ export class RiskService {
         checks: toCheckDtos(stored.evaluation.checks),
         certificateStatus: stored.certificateStatus,
         evaluatedAt: stored.evaluatedAt!.toISOString(),
+        degraded: stored.evaluation.degraded === true,
         cached: true,
       };
     }
 
-    const target = await resolveTarget(url);
-    // Las verificaciones no dependen entre sí: van en paralelo para que la
-    // respuesta tarde lo que la más lenta, no la suma (RNF01). Ninguna lanza
-    // error si el sitio o un servicio externo no contesta.
-    const [certificate, domainAge, blacklist, reports] = await Promise.all([
-      checkCertificate(target),
-      checkDomainAge(target),
-      checkBlacklist(target),
-      // Por host y no por URL completa: cuentan los reportes de cualquier
-      // página del mismo sitio.
-      this.repository.findValidatedReportsByHost(target.hostname),
-    ]);
-    const evaluation = evaluate([
-      checkHeuristics(target),
-      certificate,
-      domainAge,
-      blacklist,
-      checkCommunity(reports),
-    ]);
-    // El nivel anterior se lee antes de guardar el nuevo, para saber si subió.
-    const before =
-      (await this.repository.findRiskLevel(target.url)) ?? UNKNOWN_LEVEL;
+    const { target, certificate, domainAge, blacklist, reports } =
+      await this.withinLimit(async () => {
+        const target = await resolveTarget(url);
+        // Las verificaciones no dependen entre sí: van en paralelo para que
+        // la respuesta tarde lo que la más lenta, no la suma (RNF01).
+        // Ninguna lanza error si el sitio o un servicio externo no contesta:
+        // regresan `verified: false`.
+        const [certificate, domainAge, blacklist, reports] = await Promise.all([
+          checkCertificate(target),
+          checkDomainAge(target),
+          checkBlacklist(target),
+          // Por host y no por URL completa: cuentan los reportes de
+          // cualquier página del mismo sitio.
+          this.repository.findValidatedReportsByHost(target.hostname),
+        ]);
+        return { target, certificate, domainAge, blacklist, reports };
+      });
+    // Lo que tenía guardado se lee antes de guardar lo nuevo: sirve para
+    // saber si el nivel subió y, si algún servicio falló ahora, para no perder
+    // lo que el análisis anterior sí había encontrado.
+    const previous = await this.repository.findStored(target.url);
+    const before = previous?.riskLevel ?? UNKNOWN_LEVEL;
+    const evaluation = evaluate(
+      keepPreviousFindings(
+        [
+          checkHeuristics(target),
+          certificate,
+          domainAge,
+          blacklist,
+          checkCommunity(reports),
+        ],
+        previous?.evaluation?.checks,
+      ),
+    );
     await this.repository.saveEvaluation(
       target.url,
       certificate.status,
@@ -152,8 +194,30 @@ export class RiskService {
       checks: toCheckDtos(evaluation.checks),
       certificateStatus: certificate.status,
       evaluatedAt: new Date().toISOString(),
+      degraded: evaluation.degraded === true,
       cached: false,
     };
+  }
+
+  /**
+   * Corre `task` si hay lugar entre los análisis simultáneos.
+   *
+   * @throws {@link ServiceUnavailableException} si ya hay
+   * {@link MAX_CONCURRENT_ANALYSES} en curso. No se hace cola: quien llama
+   * puede reintentar en unos segundos.
+   */
+  private async withinLimit<T>(task: () => Promise<T>): Promise<T> {
+    if (this.running >= MAX_CONCURRENT_ANALYSES) {
+      throw new ServiceUnavailableException(
+        'Hay muchos análisis en curso. Intenta de nuevo en unos segundos',
+      );
+    }
+    this.running++;
+    try {
+      return await task();
+    } finally {
+      this.running--;
+    }
   }
 
   /**
@@ -225,7 +289,27 @@ export class RiskService {
   }
 }
 
+/**
+ * Dice si un análisis guardado todavía se puede regresar tal cual: los
+ * completos valen lo que dice la consulta (24 h); los incompletos, unos
+ * minutos. Si la base no dijo qué tan viejo es, un incompleto no se reusa.
+ */
+function isReusable(stored: StoredEvaluation): boolean {
+  if (!stored.evaluation?.degraded) return true;
+  return (
+    stored.ageSeconds !== undefined &&
+    stored.ageSeconds <= DEGRADED_CACHE_SECONDS
+  );
+}
+
 /** Deja de cada verificación solo lo que se muestra al usuario. */
 function toCheckDtos(checks: CheckResult[]): RiskCheckDto[] {
-  return checks.map(({ name, passed, detail }) => ({ name, passed, detail }));
+  return checks.map(({ name, passed, detail, verified }) => ({
+    name,
+    passed,
+    // Los análisis guardados antes de este campo no lo traen: cuentan como
+    // verificados.
+    verified: verified !== false,
+    detail,
+  }));
 }

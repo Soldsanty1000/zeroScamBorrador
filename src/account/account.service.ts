@@ -5,8 +5,9 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { verifyPassword } from '../auth/password';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
 import { TwoFactorService } from '../auth/two-factor.service';
 import { ROLES } from '../common/constants';
@@ -42,6 +43,7 @@ export class AccountService {
     private readonly auth: AuthService,
     private readonly twoFactor: TwoFactorService,
     private readonly analytics: AnalyticsService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -168,8 +170,15 @@ export class AccountService {
     return visible ? readStored(AVATARS_DIR, owner.avatarFile) : undefined;
   }
 
-  /** Elimina la cuenta del token; pide el password. El Owner no puede. */
-  async remove(userId: string, password: string): Promise<void> {
+  /**
+   * Elimina la cuenta del token; pide el password. El Owner no puede. Borra
+   * también sus comentarios; los reportes públicos se conservan sin autor
+   * (ver `AccountRepository.deleteAccount`). Queda en la bitácora
+   * (CUENTA_ELIMINADA).
+   *
+   * @param ip - Dirección del cliente, para la bitácora.
+   */
+  async remove(userId: string, password: string, ip?: string): Promise<void> {
     const me = await this.requireActive(userId);
     if (me.role === ROLES.OWNER) {
       throw new ConflictException(
@@ -178,6 +187,13 @@ export class AccountService {
     }
     await this.checkPassword(me, password);
     const evidence = await this.repository.deleteAccount(me.id);
+    // La cuenta ya no existe: se registra de inmediato, antes de limpiar el
+    // disco, para que un fallo al borrar archivos no pierda la constancia.
+    await this.audit.log('CUENTA_ELIMINADA', {
+      userId: me.id,
+      detail: `cuenta ${me.id}`,
+      ip,
+    });
     await removeStored(UPLOADS_DIR, evidence);
     if (me.avatarFile) await removeStored(AVATARS_DIR, [me.avatarFile]);
   }
@@ -205,9 +221,9 @@ export class AccountService {
     if (!password) {
       throw new BadRequestException('Confirma tu contraseña para continuar.');
     }
-    // Mismo hash que AuthService: es el que está guardado en `contrasena_hash`.
-    const hash = createHash('sha256').update(password).digest('hex');
-    if (hash !== (await this.repository.passwordHash(me.id))) {
+    // Misma verificación que AuthService: compara contra `contrasena_hash`.
+    const stored = await this.repository.passwordHash(me.id);
+    if (!stored || !(await verifyPassword(password, stored))) {
       throw new BadRequestException('La contraseña no es correcta.');
     }
   }

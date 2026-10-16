@@ -11,9 +11,20 @@ export class RiskCheckDto {
 
   @ApiProperty({
     example: false,
-    description: 'true = la verificación no encontró nada sospechoso',
+    description:
+      'true = la verificación se hizo y no encontró nada sospechoso. Una ' +
+      'verificación que no se pudo hacer (`verified: false`) nunca pasa',
   })
   passed: boolean;
+
+  @ApiProperty({
+    example: true,
+    description:
+      'false = la verificación no se pudo completar (un servicio externo o ' +
+      'el sitio no contestó, falta configuración…): no aportó puntos, pero ' +
+      'tampoco significa que esté limpio',
+  })
+  verified: boolean;
 
   @ApiProperty({ example: 'Dominio creado hace 5 días' })
   detail: string;
@@ -57,7 +68,18 @@ export class AnalyzeResponseDto {
   @ApiProperty({
     example: false,
     description:
-      'true = es un análisis guardado de las últimas 24 horas, no uno nuevo',
+      'true = alguna verificación no se pudo completar (`checks[].verified` ' +
+      'en false). El nivel sale solo de las señales obtenidas y puede ser ' +
+      'más bajo de lo real: no lo tomes como "sitio seguro". Este análisis ' +
+      'solo se reutiliza unos minutos y se puede repetir enseguida',
+  })
+  degraded: boolean;
+
+  @ApiProperty({
+    example: false,
+    description:
+      'true = es un análisis guardado (hasta 24 horas, o unos minutos si ' +
+      '`degraded`), no uno nuevo',
   })
   cached: boolean;
 }

@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
 import { Notification } from './entities/notification.entity';
 
+// COLUMNS y FROM son constantes del propio archivo: se interpolan en el SQL
+// porque no llevan ningún dato externo. Todo valor externo va como `?`.
 const COLUMNS =
   'n.id_notificacion, n.id_usuario, n.id_reporte, s.url_texto, n.mensaje, ' +
   'n.leido_estatus, n.fecha_envio';
@@ -33,11 +35,13 @@ export class NotificationsRepository {
    * @param onlyUnread - `true` para traer solo las no leídas.
    */
   async findAll(userId: string, onlyUnread: boolean): Promise<Notification[]> {
+    // `unread` es un fragmento fijo (sin datos externos), no un valor.
     const unread = onlyUnread ? 'AND n.leido_estatus = FALSE' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM ${FROM}
-       WHERE n.id_usuario = '${userId}' ${unread}
+       WHERE n.id_usuario = ? ${unread}
        ORDER BY n.fecha_envio DESC, n.id_notificacion DESC`,
+      [userId],
     );
     return rows.map(toEntity);
   }
@@ -53,15 +57,31 @@ export class NotificationsRepository {
     id: number,
     userId: string,
   ): Promise<Notification | undefined> {
+    assertInteger(id, 'id');
     const [result] = await this.pool.query<ResultSetHeader>(
       `UPDATE Notificacion_Alerta SET leido_estatus = TRUE
-       WHERE id_notificacion = ${id} AND id_usuario = '${userId}'`,
+       WHERE id_notificacion = ? AND id_usuario = ?`,
+      [id, userId],
     );
     if (result.affectedRows === 0) return undefined;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM ${FROM} WHERE n.id_notificacion = ${id}`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE n.id_notificacion = ?`,
+      [id],
     );
     return toEntity(rows[0]);
+  }
+}
+
+/**
+ * Exige que un valor numérico sea un entero antes de mandarlo a MySQL.
+ *
+ * @param value - Id recibido.
+ * @param name - Nombre del dato, para el mensaje de error.
+ * @throws {@link BadRequestException} si no es un entero.
+ */
+function assertInteger(value: number, name: string): void {
+  if (!Number.isInteger(value)) {
+    throw new BadRequestException(name + ' debe ser un número entero');
   }
 }
 

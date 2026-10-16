@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { AuditService } from '../audit/audit.service';
 import type { JwtPayload } from '../auth/jwt';
 import { UsersRepository } from '../auth/users.repository';
 import { ROLES } from '../common/constants';
@@ -16,7 +17,10 @@ import { UserResponseDto } from './dto/user-response.dto';
  */
 @Injectable()
 export class UsersService {
-  constructor(private readonly users: UsersRepository) {}
+  constructor(
+    private readonly users: UsersRepository,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * Obtiene un usuario por id.
@@ -78,21 +82,71 @@ export class UsersService {
     actor: JwtPayload,
     id: string,
     changes: UpdateUserDto,
+    ip?: string,
   ): Promise<UserResponseDto> {
     const user = await this.users.findById(id);
     if (!user) {
       throw new NotFoundException('Usuario ' + id + ' no encontrado');
     }
-    // Solo el Owner designa roles y administra otras cuentas Owner.
+    const isStaffAccount =
+      user.role === ROLES.ADMIN ||
+      user.role === ROLES.POLICE ||
+      user.role === ROLES.OWNER;
+    const changesRole =
+      changes.role !== undefined && changes.role !== user.role;
+    const suspends = changes.accountStatus === 'SUSPENDIDO';
+    // Solo el Owner designa roles y administra cuentas de staff
+    // (Administrador, Policía y otros Owner). El Administrador solo modera
+    // cuentas de ciudadanos.
     if (actor.role !== ROLES.OWNER) {
       if (changes.role) {
         throw new ForbiddenException('Solo el Owner puede cambiar roles');
       }
-      if (user.role === ROLES.OWNER) {
-        throw new ForbiddenException('Solo el Owner puede editar a un Owner');
+      if (isStaffAccount) {
+        throw new ForbiddenException(
+          'Solo el Owner puede editar cuentas de staff',
+        );
       }
     }
+    // Nadie se quita su propio rol ni se suspende a sí mismo: un error o un
+    // token robado no debe poder dejar a la administración sin cabeza.
+    if (user.id === actor.sub && (changesRole || suspends)) {
+      throw new ForbiddenException(
+        'No puedes cambiar tu propio rol ni suspender tu propia cuenta',
+      );
+    }
+    // Siempre debe quedar al menos un Owner activo.
+    if (
+      user.role === ROLES.OWNER &&
+      (changesRole || suspends) &&
+      (await this.users.countActiveByRole(ROLES.OWNER)) <= 1
+    ) {
+      throw new ForbiddenException('El sistema debe conservar un Owner activo');
+    }
     const updated = (await this.users.update(id, changes))!;
+    // Rol y estado salen de la base en cada petición (AuthGuard): el cambio
+    // aplica de inmediato. La bitácora no guarda textos libres.
+    if (changesRole) {
+      await this.audit.log('ROL_CAMBIADO', {
+        userId: actor.sub,
+        detail: `usuario ${id}: ${user.role} -> ${changes.role}`,
+        ip,
+      });
+    }
+    if (changes.accountStatus && changes.accountStatus !== user.accountStatus) {
+      await this.audit.log('CUENTA_SUSPENDIDA', {
+        userId: actor.sub,
+        detail: `usuario ${id}: ${user.accountStatus} -> ${changes.accountStatus}`,
+        ip,
+      });
+    }
+    if (!changesRole && !changes.accountStatus) {
+      await this.audit.log('CUENTA_EDITADA_POR_STAFF', {
+        userId: actor.sub,
+        detail: `usuario ${id}`,
+        ip,
+      });
+    }
     return UserResponseDto.fromEntity(updated);
   }
 }

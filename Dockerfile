@@ -4,9 +4,10 @@
 FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# Sin --no-audit: la construcción debe avisar de dependencias vulnerables.
+RUN npm ci --no-fund
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm audit --omit=dev --audit-level=high && npm prune --omit=dev
 
 # ---------- 2. Imagen final ----------
 FROM node:24-alpine AS runner
@@ -16,6 +17,8 @@ ENV NODE_ENV=production
 COPY --from=builder --chown=node:node /app/package.json ./
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
+# Scripts de operación (cuentas de staff) y esquema de la base.
+COPY --from=builder --chown=node:node /app/scripts ./scripts
 
 # Evidencias y avatares: se montan como volúmenes en docker-compose.yml.
 # Se crean aquí para que el volumen herede el dueño `node`.

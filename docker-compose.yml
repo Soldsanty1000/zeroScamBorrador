@@ -1,7 +1,12 @@
 # ZeroScam completo: MySQL + API + panel de administración + Mailpit.
+#   cp .env.example .env     # y llena MYSQL_*, JWT_SECRET y EVIDENCE_KEY
 #   docker compose up -d --build
 # El panel se construye desde su propio repo, clonado junto a este
 # (ver ADMIN_PATH en .env.example y DOCKER.md).
+#
+# Endurecimiento: la API corre sin root, con sistema de archivos de solo
+# lectura, sin capacidades de Linux y con límites de memoria y procesos; la base
+# vive en una red interna y la API solo publica en 127.0.0.1 salvo que se pida.
 
 services:
   db:
@@ -10,18 +15,26 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
       MYSQL_DATABASE: ZeroScam
+      # Usuario de la aplicación: docker/02-privilegios.sh lo limita a
+      # SELECT/INSERT/UPDATE/DELETE.
+      MYSQL_USER: ${MYSQL_USER:-zeroscam}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Falta MYSQL_PASSWORD en .env}
       TZ: ${TZ:-America/Mexico_City}
     volumes:
       - db-data:/var/lib/mysql
       - ./docker/mysql.cnf:/etc/mysql/conf.d/zeroscam.cnf:ro
-      # Solo corre la primera vez, cuando el volumen está vacío
+      # Solo corren la primera vez, cuando el volumen está vacío, en este orden.
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-    ports:
-      # Para conectarse con Workbench desde esta PC: localhost:3307
-      - "127.0.0.1:${MYSQL_PORT:-3307}:3306"
+      - ./docker/02-privilegios.sh:/docker-entrypoint-initdb.d/02-privilegios.sh:ro
+    # Sin puertos publicados: la base solo la alcanza la API por la red interna.
+    # Para entrar a mano:  docker compose exec db mysql -uroot -p ZeroScam
+    networks: [data]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       # Por TCP: durante la carga inicial MySQL solo escucha por socket
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -32,25 +45,48 @@ services:
     image: axllent/mailpit:v1.27
     container_name: zeroscam-mailpit
     ports:
-      # Página con los códigos de dos pasos: http://localhost:8025
+      # Página con los códigos de dos pasos (solo desarrollo): http://localhost:8025
       - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+    networks: [default]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     restart: unless-stopped
 
   api:
     build: .
     image: zeroscam-api:latest
     container_name: zeroscam-api
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 200
+    mem_limit: 512m
     environment:
-      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD}@db:3306/ZeroScam
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DATABASE_URL: mysql://${MYSQL_USER:-zeroscam}:${MYSQL_PASSWORD}@db:3306/ZeroScam
+      JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET en .env (openssl rand -base64 48)}
+      EVIDENCE_KEY: ${EVIDENCE_KEY:?Falta EVIDENCE_KEY en .env (openssl rand -base64 32)}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
       SMTP_URL: smtp://mailpit:1025
       MAIL_FROM: ${MAIL_FROM:-}
       SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY:-}
+      SWAGGER_USER: ${SWAGGER_USER:-}
+      SWAGGER_PASSWORD: ${SWAGGER_PASSWORD:-}
       TZ: ${TZ:-America/Mexico_City}
     volumes:
       - uploads:/app/uploads
       - avatars:/app/storage/avatars
     ports:
-      - "${API_PORT:-3000}:3000"
+      # Solo esta máquina por defecto. API_BIND=0.0.0.0 la abre a la red local:
+      # úsalo con TLS (TLS_KEY_FILE / TLS_CERT_FILE).
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-3000}:3000"
+    networks: [data, default]
     depends_on:
       db:
         condition: service_healthy
@@ -60,17 +96,32 @@ services:
 
   admin:
     build:
-      context: ${ADMIN_PATH:-../zeroscam-admin}
+      context: ${ADMIN_PATH:-../admin-web}
       args:
         # La ve el NAVEGADOR, no el contenedor: localhost = la PC del usuario
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000}
     image: zeroscam-admin:latest
     container_name: zeroscam-admin
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 200
+    mem_limit: 512m
     ports:
-      - "${ADMIN_PORT:-3001}:3001"
+      - "127.0.0.1:${ADMIN_PORT:-3001}:3001"
     depends_on:
       - api
     restart: unless-stopped
+
+networks:
+  # Red interna: sin salida a internet ni puertos hacia afuera. Solo la API y
+  # la base viven aquí.
+  data:
+    internal: true
 
 volumes:
   db-data:

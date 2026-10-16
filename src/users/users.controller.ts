@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Ip,
   Param,
   Patch,
   Query,
@@ -130,7 +131,8 @@ export class UsersController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
+    @Ip() ip: string,
   ): Promise<UserResponseDto> {
-    return this.service.update(user, id, dto);
+    return this.service.update(user, id, dto, ip);
   }
 }

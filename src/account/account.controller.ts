@@ -6,6 +6,7 @@ import {
   Get,
   Header,
   HttpCode,
+  Ip,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -169,14 +170,15 @@ export class AccountController {
     summary: 'Eliminar mi cuenta',
     description:
       'Pide el password. Los reportes ya validados quedan anónimos y sin ' +
-      'evidencia; todo lo demás se borra.',
+      'evidencia; tus comentarios, sesiones y demás datos se borran.',
   })
   @ApiNoContentResponse({ description: 'Cuenta eliminada, sin cuerpo' })
   remove(
     @CurrentUser() user: JwtPayload,
     @Body() dto: DeleteAccountDto,
+    @Ip() ip: string,
   ): Promise<void> {
-    return this.service.remove(user.sub, dto.password!);
+    return this.service.remove(user.sub, dto.password!, ip);
   }
 
   @Get('users')

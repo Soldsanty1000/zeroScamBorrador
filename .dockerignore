@@ -18,3 +18,4 @@ docker
 DOCKER.md
 deploy
 DESPLIEGUE.md
+db/*.local.txt

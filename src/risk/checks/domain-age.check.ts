@@ -8,8 +8,10 @@
  * puerto 43), sin ejecutar el comando `whois`.
  */
 import { connect, isIP } from 'node:net';
+import { isPublicHost } from '../target';
 import type { Target } from '../target';
 import { CheckResult } from './check-result';
+import { readJsonLimited } from './external-data';
 
 /**
  * rdap.org redirige al servidor RDAP del registro de cada terminación
@@ -28,8 +30,20 @@ const WHOIS_PORT = 43;
 /** Una respuesta de WHOIS son pocos KB; más que esto no se lee. */
 const WHOIS_MAX_BYTES = 64 * 1024;
 
-/** Lo que se espera a que el registro conteste, en milisegundos. */
+/**
+ * Lo que se espera a que el registro conteste, en milisegundos. En RDAP
+ * cubre la consulta completa: redirecciones y lectura del cuerpo incluidas.
+ */
 const TIMEOUT = 2000;
+
+/** Una respuesta RDAP son pocos KB; más que esto no se lee. */
+const RDAP_MAX_BYTES = 256 * 1024;
+
+/** Redirecciones que se siguen al consultar RDAP (rdap.org → registro). */
+const RDAP_MAX_REDIRECTS = 3;
+
+/** Códigos HTTP que mandan a otra dirección. */
+const REDIRECTS = [301, 302, 303, 307, 308];
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -48,13 +62,19 @@ const SECOND_LEVELS = ['com', 'org', 'net', 'edu', 'gob', 'gov', 'co'];
  *
  * @param target - Destino ya normalizado por `resolveTarget`.
  * @returns `passed: false` si el dominio tiene menos de 180 días. Si no se
- * puede saber la fecha (IP, terminación sin RDAP ni WHOIS conocido,
- * dominio sin registrar, registro caído) regresa
- * `passed: true` con 0 puntos y lo explica en `detail`.
+ * puede saber la fecha (terminación sin RDAP ni WHOIS conocido, dominio sin
+ * registrar, registro caído) regresa `verified: false` con 0 puntos y lo
+ * explica en `detail`: no se pudo verificar, que no es lo mismo que pasó. Una
+ * IP no tiene fecha de registro: ahí la verificación simplemente no aplica.
  */
 export async function checkDomainAge(target: Target): Promise<CheckResult> {
   if (isIP(target.hostname)) {
-    return ageResult(undefined, 'No aplica: la URL usa una dirección IP');
+    return {
+      name: 'domainAge',
+      passed: true,
+      detail: 'No aplica: la URL usa una dirección IP',
+      points: 0,
+    };
   }
   const domain = registrableDomain(target.hostname);
   const whoisServer = WHOIS_SERVERS[domain.split('.').pop()!];
@@ -73,7 +93,8 @@ export async function checkDomainAge(target: Target): Promise<CheckResult> {
 /**
  * Arma el resultado a partir de la fecha de registro.
  *
- * @param registered - Fecha de registro; `undefined` si no se pudo saber.
+ * @param registered - Fecha de registro; `undefined` si no se pudo saber
+ * (queda sin verificar).
  * @param subject - El dominio, o el motivo si no hay fecha.
  * @param now - Fecha contra la que se compara; solo cambia en las pruebas.
  */
@@ -83,7 +104,13 @@ export function ageResult(
   now: Date = new Date(),
 ): CheckResult {
   if (!registered) {
-    return { name: 'domainAge', passed: true, detail: subject, points: 0 };
+    return {
+      name: 'domainAge',
+      passed: false,
+      verified: false,
+      detail: subject,
+      points: 0,
+    };
   }
   const days = Math.floor((now.getTime() - registered.getTime()) / DAY);
   const detail = `${subject} se registró hace ${describeAge(days)}`;
@@ -131,31 +158,75 @@ function describeAge(days: number): string {
 /**
  * Pide por RDAP la fecha en que se registró un dominio.
  *
+ * rdap.org contesta con una redirección al servidor del registro, así que se
+ * siguen a mano: `fetch` las seguiría hacia cualquier lado (una dirección
+ * interna, por ejemplo). Cada salto debe ser HTTPS, al puerto 443, a un
+ * nombre —no una IP— que resuelva solo a direcciones públicas. Todo
+ * comparte un solo temporizador, y el cuerpo se lee con tope de tamaño.
+ *
  * @returns La fecha, o `undefined` si el registro no contesta a tiempo, no
- * conoce el dominio o su terminación no tiene RDAP.
+ * conoce el dominio, su terminación no tiene RDAP, redirige a un destino no
+ * permitido o contesta algo demasiado grande.
  */
 async function fetchRegistrationDate(
   domain: string,
 ): Promise<Date | undefined> {
   try {
-    const response = await fetch(RDAP_URL + encodeURIComponent(domain), {
-      signal: AbortSignal.timeout(TIMEOUT),
-      // Sin User-Agent rdap.org contesta 403.
-      headers: {
-        'user-agent': 'ZeroScam/1.0',
-        accept: 'application/rdap+json',
-      },
-    });
-    if (!response.ok) return undefined;
-    const body = (await response.json()) as {
-      events?: { eventAction: string; eventDate: string }[];
-    };
-    const event = body.events?.find((e) => e.eventAction === 'registration');
-    const date = event && new Date(event.eventDate);
-    return date && !Number.isNaN(date.getTime()) ? date : undefined;
+    // Un solo plazo para toda la consulta; también corta la lectura del
+    // cuerpo si el servidor lo gotea.
+    const signal = AbortSignal.timeout(TIMEOUT);
+    let url = new URL(RDAP_URL + encodeURIComponent(domain));
+    for (let redirects = 0; ; redirects++) {
+      const response = await fetch(url, {
+        signal,
+        redirect: 'manual',
+        // Sin User-Agent rdap.org contesta 403.
+        headers: {
+          'user-agent': 'ZeroScam/1.0',
+          accept: 'application/rdap+json',
+        },
+      });
+      if (REDIRECTS.includes(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
+        const location = response.headers.get('location');
+        if (!location || redirects >= RDAP_MAX_REDIRECTS) return undefined;
+        url = new URL(location, url);
+        if (!(await isAllowedRedirect(url))) return undefined;
+        continue;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      const body = (await readJsonLimited(response, RDAP_MAX_BYTES)) as {
+        events?: { eventAction: string; eventDate: string }[];
+      };
+      const event = body.events?.find((e) => e.eventAction === 'registration');
+      const date = event && new Date(event.eventDate);
+      return date && !Number.isNaN(date.getTime()) ? date : undefined;
+    }
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Dice si se puede seguir una redirección de RDAP: HTTPS, sin usuario, al
+ * puerto 443, a un nombre de dominio (no una IP) que solo resuelva a
+ * direcciones públicas.
+ *
+ * @remarks
+ * Es una validación previa: `fetch` vuelve a resolver el nombre al
+ * conectarse, así que un DNS que cambia de respuesta entre las dos
+ * consultas podría colarse. Aquí el destino lo da rdap.org a partir del
+ * registro público de IANA —no el usuario—, y la respuesta solo se lee como
+ * JSON con tope de tamaño, por lo que el riesgo que queda es bajo.
+ */
+async function isAllowedRedirect(url: URL): Promise<boolean> {
+  if (url.protocol !== 'https:' || url.username || url.password) return false;
+  if (url.port && url.port !== '443') return false;
+  if (isIP(url.hostname.replace(/^\[|\]$/g, ''))) return false;
+  return isPublicHost(url.hostname.replace(/\.$/, ''));
 }
 
 /**

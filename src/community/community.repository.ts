@@ -1,7 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-return */
-import { Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type {
   Pool,
   PoolConnection,
@@ -9,8 +15,22 @@ import type {
   RowDataPacket,
 } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
+import { lockReport } from '../reports/report-locks';
+import {
+  COMMENTS_PER_MINUTE,
+  COMMUNITY_EDITABLE_STATUSES,
+  REPORT_QUOTA_MESSAGE,
+  REPORT_QUOTA_WHERE,
+  notDeletable,
+  quotaError,
+  reportQuotaExceeded,
+  reportQuotaParams,
+  tooMany,
+} from '../reports/report-rules';
 
 const PUBLIC = "('VALIDADO', 'CANALIZADO')";
+
+const COMMENT_QUOTA_MESSAGE = 'Espera un momento antes de volver a comentar.';
 
 // Los dos `?` son el id de quien mira: marcan "confirmado por mí" y "guardado por mí".
 const COLUMNS = `r.id_reporte, r.id_usuario, t.nombre_tipo, e.nombre_estado, r.titulo,
@@ -196,39 +216,47 @@ export class CommunityRepository {
     return rows[0]?.id_tipo_fraude;
   }
 
-  async countReportsSince(userId: number, since: Date): Promise<number> {
-    const [rows] = await this.pool.query<RowDataPacket[]>(
-      'SELECT COUNT(*) AS total FROM Reporte WHERE id_usuario = ? AND fecha_creacion > ?',
-      [userId, since],
-    );
-    return Number(rows[0].total);
-  }
-
   /**
    * Inserta un reporte en RECIBIDO con su enlace y persona afectada, abre su
    * historial y avisa a quienes moderan (CU16).
    *
+   * @remarks
+   * Aplica la cuota diaria de reportes (la misma que `POST /reports`, ver
+   * {@link REPORT_QUOTA_WHERE}) DENTRO del propio INSERT: cuenta e inserta en
+   * una sola sentencia, así que dos peticiones simultáneas no pueden pasarse
+   * del tope.
+   *
    * @returns El `id_reporte` nuevo.
+   * @throws HttpException 429 si ya creó el máximo de reportes en 24 horas.
    */
   async create(ownerId: number, input: ReportInput): Promise<number> {
     return this.transaction(async (conn) => {
-      const [result] = await conn.query<ResultSetHeader>(
-        `INSERT INTO Reporte (id_usuario, id_tipo_fraude, id_estado, descripcion_incidente,
-                              fecha_incidente, titulo, ciudad, es_anonimo, afectado, tipo_otro, texto_sospechoso)
-         VALUES (?, ?, (SELECT id_estado FROM Estado WHERE nombre_estado = 'RECIBIDO'), ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          ownerId,
-          input.fraudTypeId,
-          input.description,
-          input.incidentDate,
-          input.title,
-          input.city,
-          input.anonymous,
-          input.affected,
-          input.otherType ?? null,
-          input.suspiciousText ?? null,
-        ],
-      );
+      let result: ResultSetHeader;
+      try {
+        [result] = await conn.query<ResultSetHeader>(
+          `INSERT INTO Reporte (id_usuario, id_tipo_fraude, id_estado, descripcion_incidente,
+                                fecha_incidente, titulo, ciudad, es_anonimo, afectado, tipo_otro, texto_sospechoso)
+           SELECT ?, ?, (SELECT id_estado FROM Estado WHERE nombre_estado = 'RECIBIDO'), ?, ?, ?, ?, ?, ?, ?, ?
+           FROM DUAL ${REPORT_QUOTA_WHERE}`,
+          [
+            ownerId,
+            input.fraudTypeId,
+            input.description,
+            input.incidentDate,
+            input.title,
+            input.city,
+            input.anonymous,
+            input.affected,
+            input.otherType ?? null,
+            input.suspiciousText ?? null,
+            ...reportQuotaParams(ownerId),
+          ],
+        );
+      } catch (err) {
+        throw quotaError(err, REPORT_QUOTA_MESSAGE);
+      }
+      // Sin filas insertadas: la cuota diaria ya se agotó.
+      if (result.affectedRows === 0) throw reportQuotaExceeded();
       const id = result.insertId;
       await linkUrl(conn, id, input.url);
       await saveAffectedPerson(conn, id, input.affectedPerson);
@@ -250,7 +278,15 @@ export class CommunityRepository {
   /**
    * Reemplaza los datos de un reporte y quita las evidencias indicadas.
    *
+   * @remarks
+   * Solo en los estados editables (RECIBIDO y EN_REVISION), y se comprueba
+   * DENTRO de la transacción con la fila bloqueada: si un administrador
+   * validó el reporte entre que el servicio lo leyó y este UPDATE, la edición
+   * se rechaza en vez de colarse en un reporte ya verificado.
+   *
    * @returns Los archivos (dentro de `uploads/`) de las evidencias quitadas.
+   * @throws {@link NotFoundException} si ya no existe.
+   * @throws {@link ConflictException} si ya no es editable.
    */
   async update(
     id: number,
@@ -258,6 +294,13 @@ export class CommunityRepository {
     removeEvidenceIds: number[],
   ): Promise<string[]> {
     return this.transaction(async (conn) => {
+      const current = await lockReport(conn, id);
+      if (!current) throw notFound(id);
+      if (!COMMUNITY_EDITABLE_STATUSES.includes(current.status)) {
+        throw new ConflictException(
+          'Este reporte ya fue revisado y no se puede editar.',
+        );
+      }
       await conn.query(
         `UPDATE Reporte SET id_tipo_fraude = ?, descripcion_incidente = ?, fecha_incidente = ?, titulo = ?,
                 ciudad = ?, es_anonimo = ?, afectado = ?, tipo_otro = ?, texto_sospechoso = ?
@@ -292,13 +335,30 @@ export class CommunityRepository {
   }
 
   /**
-   * Borra un reporte y lo que cuelga de él. Los avisos que lo mencionaban se
-   * conservan sin el enlace.
+   * Borra un reporte y lo que cuelga de él, si está en uno de los estados
+   * `allowed`. Los avisos que lo mencionaban se conservan sin el enlace.
    *
-   * @returns Los archivos de sus evidencias.
+   * @remarks
+   * El estado se comprueba DENTRO de la transacción con la fila bloqueada:
+   * un reporte que acaba de pasar a revisión o validarse ya no se puede
+   * borrar. Borrar un reporte EN_REVISION, VALIDADO o CANALIZADO destruiría
+   * la cadena de custodia.
+   *
+   * @param allowed - Estados en los que se permite el borrado.
+   * @returns El estado que tenía y los archivos de sus evidencias.
+   * @throws {@link NotFoundException} si no existe.
+   * @throws {@link ConflictException} si su estado no está en `allowed`.
    */
-  async delete(id: number): Promise<string[]> {
+  async delete(
+    id: number,
+    allowed: readonly string[],
+  ): Promise<{ status: string; files: string[] }> {
     return this.transaction(async (conn) => {
+      const current = await lockReport(conn, id);
+      if (!current) throw notFound(id);
+      if (!allowed.includes(current.status)) {
+        throw notDeletable(current.status, allowed);
+      }
       const [files] = await conn.query<RowDataPacket[]>(
         'SELECT ruta_archivo FROM Evidencia WHERE id_reporte = ?',
         [id],
@@ -316,19 +376,53 @@ export class CommunityRepository {
       ]) {
         await conn.query(`DELETE FROM ${table} WHERE id_reporte = ?`, [id]);
       }
-      return files.map((row) => String(row.ruta_archivo));
+      return {
+        status: current.status,
+        files: files.map((row) => String(row.ruta_archivo)),
+      };
     });
   }
 
+  /**
+   * Registra un archivo de evidencia de un reporte.
+   *
+   * @remarks
+   * Solo en los estados editables y hasta `maxEvidence` archivos, con la
+   * fila bloqueada: no se agrega evidencia a un reporte ya validado ni dos
+   * subidas simultáneas rebasan el tope.
+   *
+   * @throws {@link NotFoundException} si no existe.
+   * @throws {@link ConflictException} si ya no es editable.
+   * @throws {@link BadRequestException} si ya tiene el máximo de evidencias.
+   */
   async addEvidence(
     id: number,
     fileName: string,
     mimeType: string,
+    maxEvidence: number,
   ): Promise<void> {
-    await this.pool.query(
-      'INSERT INTO Evidencia (id_reporte, ruta_archivo, tipo_archivo) VALUES (?, ?, ?)',
-      [id, fileName, mimeType],
-    );
+    await this.transaction(async (conn) => {
+      const current = await lockReport(conn, id);
+      if (!current) throw notFound(id);
+      if (!COMMUNITY_EDITABLE_STATUSES.includes(current.status)) {
+        throw new ConflictException(
+          'Este reporte ya fue revisado y no se puede editar.',
+        );
+      }
+      const [count] = await conn.query<RowDataPacket[]>(
+        'SELECT COUNT(*) AS total FROM Evidencia WHERE id_reporte = ?',
+        [id],
+      );
+      if (Number(count[0].total) >= maxEvidence) {
+        throw new BadRequestException(
+          `Máximo ${maxEvidence} archivos de evidencia.`,
+        );
+      }
+      await conn.query(
+        'INSERT INTO Evidencia (id_reporte, ruta_archivo, tipo_archivo) VALUES (?, ?, ?)',
+        [id, fileName, mimeType],
+      );
+    });
   }
 
   /** Una evidencia con el dueño de su reporte, para decidir quién la baja. */
@@ -376,23 +470,34 @@ export class CommunityRepository {
     return (await this.commentsWhere('c.id_comentario = ?', id))[0];
   }
 
-  async countCommentsSince(userId: number, since: Date): Promise<number> {
-    const [rows] = await this.pool.query<RowDataPacket[]>(
-      'SELECT COUNT(*) AS total FROM Comentario WHERE id_usuario = ? AND fecha > ?',
-      [userId, since],
-    );
-    return Number(rows[0].total);
-  }
-
+  /**
+   * Publica un comentario.
+   *
+   * @remarks
+   * La cuota por minuto va DENTRO del INSERT: cuenta e inserta en una sola
+   * sentencia, así que una ráfaga de peticiones simultáneas no se pasa del
+   * tope (mismo mecanismo que {@link REPORT_QUOTA_WHERE}).
+   *
+   * @throws HttpException 429 si ya publicó el máximo de comentarios en un minuto.
+   */
   async addComment(
     reportId: number,
     userId: number,
     text: string,
   ): Promise<CommentRow> {
-    const [result] = await this.pool.query<ResultSetHeader>(
-      'INSERT INTO Comentario (id_reporte, id_usuario, texto) VALUES (?, ?, ?)',
-      [reportId, userId, text],
-    );
+    let result: ResultSetHeader;
+    try {
+      [result] = await this.pool.query<ResultSetHeader>(
+        `INSERT INTO Comentario (id_reporte, id_usuario, texto)
+         SELECT ?, ?, ? FROM DUAL
+         WHERE (SELECT COUNT(*) FROM Comentario WHERE id_usuario = ?
+                AND fecha > DATE_SUB(NOW(), INTERVAL 1 MINUTE)) < ?`,
+        [reportId, userId, text, userId, COMMENTS_PER_MINUTE],
+      );
+    } catch (err) {
+      throw quotaError(err, COMMENT_QUOTA_MESSAGE);
+    }
+    if (result.affectedRows === 0) throw tooMany(COMMENT_QUOTA_MESSAGE);
     return (await this.findComment(result.insertId))!;
   }
 
@@ -628,6 +733,11 @@ export class CommunityRepository {
       conn.release();
     }
   }
+}
+
+/** El 404 de un reporte que no existe (o que se borró mientras se operaba). */
+function notFound(id: number): NotFoundException {
+  return new NotFoundException('Reporte ' + id + ' no encontrado');
 }
 
 /** Liga la URL al reporte, creándola en `SitioWeb_URL` si no existía. */

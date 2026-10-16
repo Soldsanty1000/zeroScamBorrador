@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsDateString,
@@ -7,8 +8,12 @@ import {
   IsNotEmpty,
   IsString,
   IsUrl,
+  MaxLength,
   Min,
 } from 'class-validator';
+
+/** Tope de URLs por reporte. */
+export const MAX_REPORT_URLS = 10;
 
 export class CreateReportDto {
   @ApiProperty({
@@ -22,11 +27,13 @@ export class CreateReportDto {
   fraudTypeId: number;
 
   @ApiProperty({
-    description: 'Qué pasó',
+    description: 'Qué pasó (hasta 2000)',
     example: 'Me llegó un correo del "banco" pidiendo mi NIP',
+    maxLength: 2000,
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2000)
   description: string;
 
   @ApiProperty({
@@ -39,11 +46,15 @@ export class CreateReportDto {
 
   @ApiProperty({
     type: [String],
-    description: 'URLs sospechosas del incidente; al menos una',
+    description: `URLs sospechosas del incidente; de 1 a ${MAX_REPORT_URLS}, de hasta 2048 caracteres cada una`,
     example: ['https://banco-seguro-mx.com/login'],
+    minItems: 1,
+    maxItems: MAX_REPORT_URLS,
   })
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_REPORT_URLS)
+  @MaxLength(2048, { each: true })
   @IsUrl({}, { each: true })
   urls: string[];
 }

@@ -20,14 +20,24 @@ export interface StoredEvaluation {
   evaluatedAt: Date | undefined;
   /** `detalle_evaluacion`; no viene si la URL nunca se ha evaluado. */
   evaluation: Evaluation | undefined;
+  /**
+   * Segundos que han pasado desde `fecha_ultima_evaluacion`, medidos por la
+   * propia base de datos (con su reloj y su zona horaria) para no depender de
+   * la hora del servidor de la API; no viene si la URL nunca se ha analizado.
+   */
+  ageSeconds?: number;
 }
 
 const EVALUATION_COLUMNS =
-  'url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion, detalle_evaluacion';
+  'url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion, detalle_evaluacion, ' +
+  'TIMESTAMPDIFF(SECOND, fecha_ultima_evaluacion, NOW()) AS edad_segundos';
+
+/** Tope de un `INTERVAL` en horas o días; nadie lo pide más grande. */
+const MAX_INTERVAL = 100_000;
 
 /**
  * Consultas de riesgo sobre `SitioWeb_URL` y los reportes validados ligados
- * a cada URL.
+ * a cada URL. Todo valor externo va como parámetro `?`, nunca pegado al SQL.
  */
 @Injectable()
 export class RiskRepository {
@@ -41,8 +51,9 @@ export class RiskRepository {
   async findSites(q: string): Promise<RiskSiteDto[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion
-       FROM SitioWeb_URL WHERE url_texto LIKE '%${q}%'
+       FROM SitioWeb_URL WHERE url_texto LIKE ?
        ORDER BY FIELD(nivel_riesgo_global, 'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO') DESC`,
+      [containing(q)],
     );
     return rows.map((row) => ({
       url: row.url_texto,
@@ -69,8 +80,9 @@ export class RiskRepository {
        JOIN TipoFraude t ON t.id_tipo_fraude = r.id_tipo_fraude
        JOIN Reporte_URL ru ON ru.id_reporte = r.id_reporte
        JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE s.url_texto LIKE '%${q}%' AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
+       WHERE s.url_texto LIKE ? AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
        ORDER BY r.fecha_incidente DESC`,
+      [containing(q)],
     );
     return rows.map((row) => ({
       fraudType: row.nombre_tipo,
@@ -97,8 +109,9 @@ export class RiskRepository {
        JOIN TipoFraude t ON t.id_tipo_fraude = r.id_tipo_fraude
        JOIN Reporte_URL ru ON ru.id_reporte = r.id_reporte
        JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE s.url_texto LIKE '%${hostname}%' AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
+       WHERE s.url_texto LIKE ? AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
        ORDER BY r.fecha_incidente DESC`,
+      [containing(hostname)],
     );
     // El LIKE también trae `banco.com.malo.net` o `mibanco.com`: el host se
     // compara completo aquí. Un reporte con dos URLs del sitio llega dos
@@ -119,6 +132,10 @@ export class RiskRepository {
   /**
    * Análisis guardado de una URL, si todavía es reciente.
    *
+   * Un análisis incompleto (`evaluation.degraded`) también se regresa aquí,
+   * con su `ageSeconds`: quien llama decide si todavía sirve, porque su
+   * vigencia es de minutos y no de horas.
+   *
    * @param url - URL normalizada (`normalizeUrl`).
    * @param maxAgeHours - Horas que un análisis se considera vigente.
    * @returns El análisis, o `undefined` si la URL no se ha analizado o su
@@ -130,25 +147,26 @@ export class RiskRepository {
   ): Promise<StoredEvaluation | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${EVALUATION_COLUMNS} FROM SitioWeb_URL
-       WHERE url_texto = '${url}' AND detalle_evaluacion IS NOT NULL
-         AND fecha_ultima_evaluacion >= NOW() - INTERVAL ${maxAgeHours} HOUR`,
+       WHERE url_texto = ? AND detalle_evaluacion IS NOT NULL
+         AND fecha_ultima_evaluacion >= NOW() - INTERVAL ? HOUR`,
+      [url, interval(maxAgeHours, 'maxAgeHours')],
     );
     return rows[0] && toStored(rows[0]);
   }
 
   /**
-   * Nivel de riesgo que tiene hoy una URL, sin importar si su análisis es
-   * reciente.
+   * Lo que tiene guardado una URL, sin importar si su análisis es reciente:
+   * su nivel de riesgo de hoy y las verificaciones del último análisis.
    *
    * @param url - URL normalizada (`normalizeUrl`).
-   * @returns `nivel_riesgo_global`, o `undefined` si la URL no está
-   * registrada.
+   * @returns La fila, o `undefined` si la URL no está registrada.
    */
-  async findRiskLevel(url: string): Promise<string | undefined> {
+  async findStored(url: string): Promise<StoredEvaluation | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT nivel_riesgo_global FROM SitioWeb_URL WHERE url_texto = '${url}'`,
+      `SELECT ${EVALUATION_COLUMNS} FROM SitioWeb_URL WHERE url_texto = ?`,
+      [url],
     );
-    return rows[0]?.nivel_riesgo_global as string | undefined;
+    return rows[0] && toStored(rows[0]);
   }
 
   /**
@@ -159,7 +177,8 @@ export class RiskRepository {
   async findEvaluationsByHost(hostname: string): Promise<StoredEvaluation[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${EVALUATION_COLUMNS} FROM SitioWeb_URL
-       WHERE url_texto LIKE '%${hostname}%'`,
+       WHERE url_texto LIKE ?`,
+      [containing(hostname)],
     );
     // Mismo motivo que en `findValidatedReportsByHost`: el host exacto se
     // compara aquí.
@@ -172,9 +191,12 @@ export class RiskRepository {
    * Guarda el resultado de analizar una URL, creándola en `SitioWeb_URL` si
    * no existía, y marca la fecha del análisis.
    *
-   * @param url - URL normalizada (`normalizeUrl`).
+   * @param url - URL normalizada (`normalizeUrl`): sin cadena de consulta ni
+   * fragmento, que pueden traer datos de la víctima.
    * @param certificateStatus - VALIDO, INSEGURO, EXPIRADO o INACCESIBLE.
-   * @param evaluation - Puntaje, nivel y verificaciones.
+   * @param evaluation - Puntaje, nivel y verificaciones. Si es `degraded`
+   * queda marcada en `detalle_evaluacion` y `RiskService` solo la reutiliza
+   * unos minutos.
    */
   async saveEvaluation(
     url: string,
@@ -183,12 +205,18 @@ export class RiskRepository {
   ): Promise<void> {
     await this.pool.query(
       `INSERT INTO SitioWeb_URL (url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion, detalle_evaluacion)
-       VALUES ('${url}', '${evaluation.riskLevel}', '${certificateStatus}', NOW(), ${jsonLiteral(evaluation)})
+       VALUES (?, ?, ?, NOW(), ?)
        ON DUPLICATE KEY UPDATE
          nivel_riesgo_global = VALUES(nivel_riesgo_global),
          estado_certificado = VALUES(estado_certificado),
          fecha_ultima_evaluacion = VALUES(fecha_ultima_evaluacion),
          detalle_evaluacion = VALUES(detalle_evaluacion)`,
+      [
+        url,
+        evaluation.riskLevel,
+        certificateStatus,
+        JSON.stringify(evaluation),
+      ],
     );
   }
 
@@ -203,9 +231,10 @@ export class RiskRepository {
   async saveRisk(url: string, evaluation: Evaluation): Promise<void> {
     await this.pool.query(
       `UPDATE SitioWeb_URL SET
-         nivel_riesgo_global = '${evaluation.riskLevel}',
-         detalle_evaluacion = ${jsonLiteral(evaluation)}
-       WHERE url_texto = '${url}'`,
+         nivel_riesgo_global = ?,
+         detalle_evaluacion = ?
+       WHERE url_texto = ?`,
+      [evaluation.riskLevel, JSON.stringify(evaluation), url],
     );
   }
 
@@ -219,8 +248,9 @@ export class RiskRepository {
   async recordLookup(userId: string, url: string): Promise<void> {
     await this.pool.query(
       `INSERT INTO Consulta_URL (id_usuario, id_url)
-       SELECT '${userId}', id_url FROM SitioWeb_URL WHERE url_texto = '${url}'
+       SELECT ?, id_url FROM SitioWeb_URL WHERE url_texto = ?
        ON DUPLICATE KEY UPDATE fecha_consulta = NOW()`,
+      [userId, url],
     );
   }
 
@@ -240,39 +270,62 @@ export class RiskRepository {
     days: number,
     exceptUserId?: string,
   ): Promise<void> {
-    const except = exceptUserId ? `AND d.id_usuario <> '${exceptUserId}'` : '';
+    // Los valores van en `params` en el mismo orden en que aparecen los `?`.
+    const params: unknown[] = [
+      message,
+      interval(days, 'days'),
+      interval(days, 'days'),
+      url,
+    ];
+    // `except` es texto fijo; el id del usuario viaja como parámetro.
+    let except = '';
+    if (exceptUserId) {
+      except = 'AND d.id_usuario <> ?';
+      params.push(exceptUserId);
+    }
     // UNION (sin ALL) deja una sola fila por usuario aunque haya consultado
     // y además reportado la URL: recibe una alerta, no dos.
     await this.pool.query(
       `INSERT INTO Notificacion_Alerta (id_usuario, id_url, mensaje)
-       SELECT d.id_usuario, s.id_url, '${message}'
+       SELECT d.id_usuario, s.id_url, ?
        FROM SitioWeb_URL s
        JOIN (
          SELECT c.id_usuario, c.id_url FROM Consulta_URL c
-         WHERE c.fecha_consulta >= NOW() - INTERVAL ${days} DAY
+         WHERE c.fecha_consulta >= NOW() - INTERVAL ? DAY
          UNION
          SELECT r.id_usuario, ru.id_url FROM Reporte_URL ru
          JOIN Reporte r ON r.id_reporte = ru.id_reporte
-         WHERE r.fecha_creacion >= NOW() - INTERVAL ${days} DAY
+         WHERE r.fecha_creacion >= NOW() - INTERVAL ? DAY
        ) d ON d.id_url = s.id_url
        JOIN Usuario u ON u.id_usuario = d.id_usuario
-       WHERE s.url_texto = '${url}' AND u.estado_cuenta = 'ACTIVO' ${except}`,
+       WHERE s.url_texto = ? AND u.estado_cuenta = 'ACTIVO' ${except}`,
+      params,
     );
   }
 }
 
 /**
- * Expresión SQL con un objeto como JSON, para una columna de tipo JSON.
+ * Pasa a texto el patrón de un `LIKE` que busca `text` en cualquier parte.
  *
- * El JSON lleva comillas dobles y diagonales invertidas, y los textos de las
- * verificaciones pueden traer apóstrofos ("Let's Encrypt"): pegado tal cual
- * en la consulta la rompería. Va en base64, que solo usa letras, números y
- * `+/=`, y MySQL lo decodifica.
+ * `\`, `%` y `_` del texto cuentan como caracteres normales y no como
+ * comodines: así `50%` o `mi_sitio.com` se buscan tal cual.
  */
-function jsonLiteral(value: object): string {
-  const base64 = Buffer.from(JSON.stringify(value)).toString('base64');
-  // FROM_BASE64 regresa bytes sin charset; una columna JSON exige utf8mb4.
-  return `CONVERT(FROM_BASE64('${base64}') USING utf8mb4)`;
+function containing(text: string): string {
+  return `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
+/**
+ * Valida el número de horas o días de un `INTERVAL ? HOUR|DAY`.
+ *
+ * @throws {@link RangeError} si no es un entero entre 0 y {@link MAX_INTERVAL}.
+ */
+function interval(value: number, name: string): number {
+  if (!Number.isInteger(value) || value < 0 || value > MAX_INTERVAL) {
+    throw new RangeError(
+      `${name} debe ser un entero entre 0 y ${MAX_INTERVAL}`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -287,6 +340,10 @@ function toStored(row: any): StoredEvaluation {
     riskLevel: row.nivel_riesgo_global,
     certificateStatus: row.estado_certificado ?? undefined,
     evaluatedAt: row.fecha_ultima_evaluacion ?? undefined,
+    ageSeconds:
+      row.edad_segundos === null || row.edad_segundos === undefined
+        ? undefined
+        : Number(row.edad_segundos),
     // mysql2 ya entrega las columnas JSON como objeto; si llegara como texto
     // (otra versión del driver) se interpreta aquí.
     evaluation:

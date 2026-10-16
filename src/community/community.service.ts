@@ -2,8 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  HttpException,
-  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +10,7 @@ import { AccountService, isStaff } from '../account/account.service';
 import { AccountResponseDto } from '../account/dto/account.dto';
 import { DELETED_STATUS } from '../account/account.repository';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { AuditService } from '../audit/audit.service';
 import { POLICE_VISIBLE_STATUSES } from '../common/constants';
 import {
   readStored,
@@ -19,6 +18,11 @@ import {
   storeUpload,
   UPLOADS_DIR,
 } from '../common/files';
+import {
+  COMMUNITY_EDITABLE_STATUSES,
+  deletableStatuses,
+  notDeletable,
+} from '../reports/report-rules';
 import {
   CommentRow,
   CommunityReport,
@@ -38,11 +42,7 @@ import {
   UpdateCommunityReportDto,
 } from './dto/community.dto';
 
-const REPORTS_PER_DAY = 10;
-const COMMENTS_PER_MINUTE = 5;
 const MAX_EVIDENCE = 3;
-/** El autor puede editar mientras nadie lo haya validado ni cerrado. */
-const EDITABLE_STATUSES = ['RECIBIDO', 'EN_REVISION'];
 const RISK_ORDER = ['NO_EVALUADO', 'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO'];
 
 /**
@@ -59,6 +59,7 @@ export class CommunityService {
     private readonly accounts: AccountService,
     private readonly accountsRepository: AccountRepository,
     private readonly analytics: AnalyticsService,
+    private readonly audit: AuditService,
   ) {}
 
   // ---------- Listas y detalle ----------
@@ -116,21 +117,19 @@ export class CommunityService {
 
   // ---------- Crear, editar, eliminar ----------
 
+  /**
+   * Crea un reporte desde la app. La cuota diaria (la misma de
+   * `POST /reports`) la aplica el repositorio dentro del propio INSERT, de
+   * forma atómica.
+   *
+   * @throws HttpException 429 si ya creó el máximo de reportes en 24 horas.
+   */
   async create(
     userId: string,
     dto: SaveCommunityReportDto,
   ): Promise<CommunityReportDto> {
     const me = await this.accounts.requireActive(userId);
     const input = await this.toInput(dto);
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    if (
-      (await this.repository.countReportsSince(me.id, dayAgo)) >=
-      REPORTS_PER_DAY
-    ) {
-      throw tooMany(
-        `Llegaste al límite de ${REPORTS_PER_DAY} reportes por día. Intenta mañana.`,
-      );
-    }
     const id = await this.repository.create(me.id, input);
     await this.analytics.count('reporte_enviado', me.id);
     return toView((await this.repository.findById(me.id, id))!, me);
@@ -150,14 +149,36 @@ export class CommunityService {
     return toView((await this.repository.findById(me.id, id))!, me);
   }
 
-  /** El autor borra el suyo; quien modera, cualquiera. */
-  async remove(userId: string, id: number): Promise<void> {
+  /**
+   * Borra un reporte. El autor solo mientras siga en RECIBIDO (igual que en
+   * `DELETE /reports/:id`); Administrador y Owner solo RECIBIDO o RECHAZADO.
+   * Un reporte EN_REVISION, VALIDADO o CANALIZADO no se borra por nadie: es
+   * parte del registro de verificación y borrarlo destruiría la cadena de
+   * custodia. Queda en la bitácora (REPORTE_ELIMINADO).
+   *
+   * @param ip - Dirección del cliente, para la bitácora.
+   * @throws {@link ForbiddenException} si no es el autor ni modera.
+   * @throws {@link ConflictException} si el estado del reporte no permite borrarlo.
+   */
+  async remove(userId: string, id: number, ip?: string): Promise<void> {
     const me = await this.accounts.requireActive(userId);
     const report = await this.visible(me, id);
-    if (report.author.id !== me.id && !isStaff(me)) {
+    const mine = report.author.id === me.id;
+    if (!mine && !isStaff(me)) {
       throw new ForbiddenException('No tienes permiso para hacer esto');
     }
-    await removeStored(UPLOADS_DIR, await this.repository.delete(id));
+    const allowed = deletableStatuses(isStaff(me));
+    if (!allowed.includes(report.status)) {
+      throw notDeletable(report.status, allowed);
+    }
+    // El repositorio vuelve a comprobar el estado con la fila bloqueada.
+    const deleted = await this.repository.delete(id, allowed);
+    await this.audit.log('REPORTE_ELIMINADO', {
+      userId: me.id,
+      detail: `reporte ${id} (${deleted.status})${mine ? '' : ' por moderación'}`,
+      ip,
+    });
+    await removeStored(UPLOADS_DIR, deleted.files);
   }
 
   /** Adjunta una evidencia (JPEG o PDF) a un reporte propio aún editable. */
@@ -177,7 +198,19 @@ export class CommunityService {
       'image/jpeg',
       'application/pdf',
     ]);
-    await this.repository.addEvidence(id, stored.fileName, stored.mimeType);
+    try {
+      // El repositorio vuelve a comprobar estado y tope con la fila bloqueada.
+      await this.repository.addEvidence(
+        id,
+        stored.fileName,
+        stored.mimeType,
+        MAX_EVIDENCE,
+      );
+    } catch (err) {
+      // Sin registro en la base el archivo quedaría huérfano en disco.
+      await removeStored(UPLOADS_DIR, [stored.fileName]);
+      throw err;
+    }
     return toView((await this.repository.findById(me.id, id))!, me);
   }
 
@@ -236,13 +269,8 @@ export class CommunityService {
         'Solo se puede comentar en reportes validados.',
       );
     }
-    const minuteAgo = new Date(Date.now() - 60 * 1000);
-    if (
-      (await this.repository.countCommentsSince(me.id, minuteAgo)) >=
-      COMMENTS_PER_MINUTE
-    ) {
-      throw tooMany('Espera un momento antes de volver a comentar.');
-    }
+    // La cuota por minuto la aplica el repositorio dentro del propio INSERT
+    // (429 si ya se pasó), así que una ráfaga no la rebasa.
     const created = await this.repository.addComment(id, me.id, text.trim());
     if (
       report.author.id !== me.id &&
@@ -362,7 +390,8 @@ export class CommunityService {
   private async editable(me: Profile, id: number): Promise<CommunityReport> {
     const report = await this.repository.findById(me.id, id);
     if (!report || report.author.id !== me.id) throw notFound(id);
-    if (!EDITABLE_STATUSES.includes(report.status)) {
+    // El repositorio vuelve a comprobarlo con la fila bloqueada.
+    if (!COMMUNITY_EDITABLE_STATUSES.includes(report.status)) {
       throw new ConflictException(
         'Este reporte ya fue revisado y no se puede editar.',
       );
@@ -409,10 +438,6 @@ export class CommunityService {
 
 function notFound(id: number): NotFoundException {
   return new NotFoundException('Reporte ' + id + ' no encontrado');
-}
-
-function tooMany(message: string): HttpException {
-  return new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
 }
 
 function isPublic(report: CommunityReport): boolean {

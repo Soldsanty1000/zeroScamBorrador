@@ -1,3 +1,4 @@
+import { EMAIL_MESSAGE, EMAIL_PATTERN } from '../../common/validation';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -62,6 +63,7 @@ export class UpdateAccountDto {
   @ApiProperty({ type: String, example: 'dana@example.com' })
   @IsEmail()
   @MaxLength(150)
+  @Matches(EMAIL_PATTERN, { message: EMAIL_MESSAGE })
   email: string | undefined;
 
   @ApiProperty({

@@ -2,22 +2,36 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
-import { sign, verify } from './jwt';
+import { sign, verify, type JwtPayload } from './jwt';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { AuditService } from '../audit/audit.service';
 import { VerifyCodeDto } from './dto/verify-code.dto';
+import { LoginAttempts } from './login-attempts';
+import {
+  dummyHash,
+  hashPassword,
+  needsRehash,
+  verifyPassword,
+} from './password';
+import { SessionsService } from './sessions.service';
 import { TwoFactorChallenge, TwoFactorService } from './two-factor.service';
 import { UsersRepository } from './users.repository';
+import type { User } from './entities/user.entity';
 
 const ACCESS_TTL = 15 * 60; // 15 minutos
 const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 días
+
+/** Mismo texto para correo inexistente y contraseña incorrecta (no revela cuentas). */
+const BAD_CREDENTIALS = 'Correo o contraseña incorrectos';
 
 /**
  * Registro de usuarios y emisión de tokens JWT.
@@ -28,6 +42,9 @@ export class AuthService {
     private readonly users: UsersRepository,
     private readonly twoFactor: TwoFactorService,
     private readonly analytics: AnalyticsService,
+    private readonly sessions: SessionsService,
+    private readonly attempts: LoginAttempts,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -54,7 +71,7 @@ export class AuthService {
         lastName: dto.lastName,
         country: dto.country,
       },
-      hash(dto.password!),
+      await hashPassword(dto.password!),
     );
     return {
       id: user.id!,
@@ -67,46 +84,68 @@ export class AuthService {
    * Valida credenciales y emite un par de tokens.
    *
    * @param dto - Email y password.
+   * @param ip - Dirección del cliente, para el límite de intentos.
    * @returns Un `accessToken` de 15 minutos y un `refreshToken` de 7 días; o,
    * si la cuenta tiene verificación en dos pasos, el desafío que se canjea en
    * `POST /auth/two-factor/verify`.
-   * @throws {@link UnauthorizedException} si el usuario no existe o el
-   * password no coincide.
+   * @throws {@link UnauthorizedException} si el correo o el password no
+   * coinciden (siempre el mismo mensaje).
+   * @throws {@link HttpException} 429 si hay demasiados intentos fallidos.
    * @throws {@link ForbiddenException} si la cuenta está suspendida (RF03).
    */
   async login(
     dto: LoginDto,
+    ip = 'desconocida',
   ): Promise<
     { accessToken: string; refreshToken: string } | TwoFactorChallenge
   > {
+    const key = LoginAttempts.key(dto.email!, ip);
+    const locked = this.attempts.secondsLocked(key);
+    if (locked > 0) {
+      await this.audit.log('LOGIN_BLOQUEADO', {
+        detail: 'demasiados intentos',
+        ip,
+      });
+      throw new HttpException(
+        `Demasiados intentos. Intenta de nuevo en ${Math.ceil(locked / 60)} min.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const user = await this.users.findByEmail(dto.email!);
-    if (!user) {
-      throw new UnauthorizedException('El usuario no existe');
+    // Si el correo no existe se gasta el mismo tiempo hasheando contra un hash
+    // de relleno: el tiempo de respuesta no delata qué cuentas existen.
+    const valid = user
+      ? await verifyPassword(dto.password!, user.passwordHash!)
+      : (await verifyPassword(dto.password!, await dummyHash()), false);
+    if (!user || !valid) {
+      this.attempts.fail(key);
+      await this.audit.log('LOGIN_FALLIDO', {
+        userId: user?.id,
+        detail: user ? 'contraseña incorrecta' : 'correo inexistente',
+        ip,
+      });
+      throw new UnauthorizedException(BAD_CREDENTIALS);
     }
-    // No guardamos el password, solo su hash. Para comprobarlo hasheamos lo
-    // que llegó y comparamos contra lo guardado.
-    if (user.passwordHash !== hash(dto.password!)) {
-      throw new UnauthorizedException('Password incorrecto');
-    }
+    this.attempts.success(key);
     // Un administrador puede desactivar cuentas (RF03): esas ya no entran.
     if (user.accountStatus !== 'ACTIVO') {
       throw new ForbiddenException('La cuenta está suspendida');
+    }
+    // Hash viejo (SHA-256 sin sal) o con parámetros débiles: se reemplaza ahora
+    // que se conoce la contraseña.
+    if (needsRehash(user.passwordHash!)) {
+      await this.users.updatePassword(
+        user.id!,
+        await hashPassword(dto.password!),
+      );
     }
     // Con verificación en dos pasos el password no basta: los tokens se
     // entregan hasta que llegue el código.
     if (await this.twoFactor.isEnabled(user.id!)) {
       return this.twoFactor.createChallenge(user.id!, user.email!);
     }
-    // Dos tokens con los mismos datos y distinta vida: el access viaja en cada
-    // request, así que dura poco por si se filtra; el refresh solo va a
-    // /auth/refresh y dura más para no pedir el password cada 15 minutos.
-    // El rol viaja en el token para el control de acceso por roles (RNF04).
-    const claims = { sub: user.id!, email: user.email!, role: user.role! };
-    const accessToken = sign({ ...claims, type: 'access' }, ACCESS_TTL);
-    const refreshToken = sign({ ...claims, type: 'refresh' }, REFRESH_TTL);
-    console.log('Login de ' + user.email + ': ' + accessToken);
     await this.analytics.count('inicio_sesion', user.id!);
-    return { accessToken, refreshToken };
+    return this.issueTokens(user, ip);
   }
 
   /**
@@ -119,18 +158,15 @@ export class AuthService {
    */
   async verifyCode(
     dto: VerifyCodeDto,
+    ip?: string,
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const userId = await this.twoFactor.verify(dto.challengeId!, dto.code!);
     const user = await this.users.findById(userId);
     if (!user || user.accountStatus !== 'ACTIVO') {
       throw new UnauthorizedException('El código no es válido o ya expiró');
     }
-    const claims = { sub: user.id!, email: user.email!, role: user.role! };
     await this.analytics.count('inicio_sesion', user.id!);
-    return {
-      accessToken: sign({ ...claims, type: 'access' }, ACCESS_TTL),
-      refreshToken: sign({ ...claims, type: 'refresh' }, REFRESH_TTL),
-    };
+    return this.issueTokens(user, ip);
   }
 
   /**
@@ -138,24 +174,29 @@ export class AuthService {
    *
    * @param dto - Contiene el `refreshToken` emitido en el login.
    * @returns Un `accessToken` nuevo de 15 minutos.
-   * @throws {@link UnauthorizedException} si el token es inválido, expiró o no
-   * es de tipo `refresh`.
+   * @throws {@link UnauthorizedException} si el token es inválido, expiró, no
+   * es de tipo `refresh`, su sesión se cerró o la cuenta ya no está activa.
    */
-  refresh(dto: RefreshDto): { accessToken: string } {
-    // No consulta la base: `sub` y `email` vienen dentro del token, y la firma
-    // garantiza que lo emitimos nosotros.
+  async refresh(dto: RefreshDto): Promise<{ accessToken: string }> {
     const payload = verify(dto.refreshToken!);
     // Exigir `type: 'refresh'` impide encadenar access tokens: sin esto, cada
     // access podría canjearse por otro y la sesión nunca caducaría.
     if (!payload || payload.type !== 'refresh') {
       throw new UnauthorizedException('Refresh token inválido');
     }
+    // Se consulta la base: una sesión cerrada, una cuenta suspendida o borrada
+    // ya no renuevan, y el rol sale de la base, no del token viejo.
+    const session = await this.sessions.validate(payload.sid, payload.sub);
+    if (!session) {
+      throw new UnauthorizedException('Refresh token inválido');
+    }
     const accessToken = sign(
       {
         sub: payload.sub,
-        email: payload.email,
-        role: payload.role,
+        email: session.email,
+        role: session.role,
         type: 'access',
+        sid: payload.sid,
       },
       ACCESS_TTL,
     );
@@ -163,24 +204,37 @@ export class AuthService {
   }
 
   /**
-   * Cambia el password del usuario del token.
+   * Cierra la sesión del token: sus access y refresh tokens dejan de valer en
+   * ese momento (CU03, CU10, CU15).
+   */
+  async logout(user: JwtPayload, ip?: string): Promise<void> {
+    await this.sessions.revoke(user.sid);
+    await this.audit.log('LOGOUT', { userId: user.sub, ip });
+  }
+
+  /**
+   * Cambia el password del usuario del token y cierra sus demás sesiones.
    *
-   * @param userId - `sub` del access token.
+   * @param user - Payload del access token que hace el cambio.
    * @param dto - Password actual y nuevo; el nuevo ya cumple las reglas del
    * registro.
    * @throws {@link UnauthorizedException} si la cuenta del token ya no existe.
    * @throws {@link BadRequestException} si el password actual no coincide o
    * el nuevo es igual al actual.
    */
-  async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
-    const user = await this.users.findById(userId);
-    if (!user) {
+  async changePassword(
+    user: JwtPayload,
+    dto: ChangePasswordDto,
+    ip?: string,
+  ): Promise<void> {
+    const found = await this.users.findById(user.sub);
+    if (!found) {
       throw new UnauthorizedException('El usuario no existe');
     }
     // Pedir el password actual evita que alguien con un token ajeno (o con
     // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
     // no un 401: el token es válido, lo que está mal es el dato.
-    if (user.passwordHash !== hash(dto.currentPassword!)) {
+    if (!(await verifyPassword(dto.currentPassword!, found.passwordHash!))) {
       throw new BadRequestException('El password actual es incorrecto');
     }
     if (dto.newPassword === dto.currentPassword) {
@@ -188,17 +242,36 @@ export class AuthService {
         'El password nuevo debe ser distinto al actual',
       );
     }
-    await this.users.updatePassword(userId, hash(dto.newPassword!));
+    await this.users.updatePassword(
+      user.sub,
+      await hashPassword(dto.newPassword!),
+    );
+    // Si alguien más tenía la sesión abierta, ya no: solo queda esta.
+    await this.sessions.revokeAll(user.sub, user.sid);
+    await this.audit.log('PASSWORD_CAMBIADA', { userId: user.sub, ip });
   }
-}
 
-/**
- * Hashea un password con SHA-256.
- *
- * @param password - Password en texto plano.
- * @returns El hash en hexadecimal: 64 caracteres; cabe en la columna
- * `contrasena_hash` (VARCHAR(255)).
- */
-function hash(password: string): string {
-  return createHash('sha256').update(password).digest('hex');
+  /**
+   * Abre una sesión y emite sus dos tokens, con la misma vida que la sesión.
+   * Dos tokens con los mismos datos y distinta vida: el access viaja en cada
+   * request, así que dura poco por si se filtra; el refresh solo va a
+   * /auth/refresh y dura más para no pedir el password cada 15 minutos.
+   */
+  private async issueTokens(
+    user: User,
+    ip?: string,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const sid = await this.sessions.create(user.id!, REFRESH_TTL);
+    await this.audit.log('LOGIN_OK', { userId: user.id, ip });
+    const claims = {
+      sub: user.id!,
+      email: user.email!,
+      role: user.role!,
+      sid,
+    };
+    return {
+      accessToken: sign({ ...claims, type: 'access' }, ACCESS_TTL),
+      refreshToken: sign({ ...claims, type: 'refresh' }, REFRESH_TTL),
+    };
+  }
 }

@@ -1,6 +1,10 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import { existsSync } from 'node:fs';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { createTransport, type Transporter } from 'nodemailer';
+import { dev2faLog, loadEnv } from '../config';
 
 const DEFAULT_FROM = '0Fraude <no-responder@zeroscam.local>';
 
@@ -10,11 +14,13 @@ const DEFAULT_FROM = '0Fraude <no-responder@zeroscam.local>';
  * El servidor de correo se configura con `SMTP_URL` (por ejemplo
  * `smtp://localhost:1025` para Mailpit en esta misma máquina). No sale a
  * internet: entrega a un servidor de la propia red. Sin `SMTP_URL` no hay a
- * dónde mandar y el código se escribe en la consola del servidor, que es lo
- * que se hacía antes.
+ * dónde mandar: el código NO se escribe en el log (es una credencial) y el
+ * login responde 503. Solo en desarrollo, con `DEV_LOG_2FA_CODES=true`, se
+ * escribe en la consola.
  */
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
   private transport: Transporter | undefined;
 
   /**
@@ -30,8 +36,13 @@ export class MailService {
   async sendCode(to: string, code: string, minutes: number): Promise<void> {
     const transport = this.getTransport();
     if (!transport) {
-      console.log('Código de verificación para ' + to + ': ' + code);
-      return;
+      if (dev2faLog()) {
+        this.logger.warn(`[solo desarrollo] código de ${to}: ${code}`);
+        return;
+      }
+      throw new ServiceUnavailableException(
+        'No hay servidor de correo configurado para enviar el código.',
+      );
     }
     try {
       await transport.sendMail({
@@ -50,7 +61,7 @@ export class MailService {
       });
     } catch (err) {
       // Ni el código ni el destinatario van al log: solo por qué falló.
-      console.error(
+      this.logger.error(
         'No se pudo enviar el correo de verificación: ' +
           (err instanceof Error ? err.message : String(err)),
       );
@@ -64,7 +75,7 @@ export class MailService {
   private getTransport(): Transporter | undefined {
     if (this.transport) return this.transport;
     // Igual que DatabaseModule: la configuración vive en .env.
-    if (!process.env.SMTP_URL && existsSync('.env')) process.loadEnvFile();
+    loadEnv();
     const url = process.env.SMTP_URL;
     if (!url) return undefined;
     this.transport = createTransport(url);

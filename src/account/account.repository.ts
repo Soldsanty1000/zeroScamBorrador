@@ -160,10 +160,28 @@ export class AccountRepository {
   }
 
   /**
-   * Derecho de cancelación. Lo público sigue ayudando a la comunidad pero sin
-   * rastro de la persona (anónimo, sin persona afectada ni evidencia); lo
-   * demás se borra. La fila de `Usuario` se conserva vacía, con estado
-   * ELIMINADA, porque historial y comentarios la referencian.
+   * Derecho de cancelación. Todo corre en UNA transacción: o se borra todo o
+   * no se borra nada.
+   *
+   * Qué se BORRA: sus comentarios (en cualquier reporte), sus reportes que
+   * nunca fueron públicos (todo lo que no esté VALIDADO ni CANALIZADO, con su
+   * historial, URLs y avisos), TODA su evidencia y la persona afectada de
+   * todos sus reportes, lo que guardó y confirmó, sus avisos, sus consultas
+   * de URL, sus desafíos de dos pasos y sus sesiones. Los datos personales de
+   * la fila de `Usuario` se vacían.
+   *
+   * Qué se CONSERVA y por qué: los reportes públicos (VALIDADO o CANALIZADO),
+   * pero sin rastro de la persona: se marcan anónimos, pierden la evidencia y
+   * la persona afectada, y su autor aparece como "Cuenta eliminada". Ya los
+   * verificó la administración, alimentan el riesgo de sus URLs y las
+   * estadísticas de la comunidad, y quizá ya se canalizaron a la Policía:
+   * borrarlos quitaría protección a otras víctimas y rompería el expediente.
+   * Su texto (título, descripción, ciudad, enlace) queda tal cual: es el
+   * contenido verificado, y la anonimización quita a la persona, no lo que
+   * reportó. También se conserva su historial de estados (el nombre ya no se muestra),
+   * la fila de `Usuario` vacía con estado ELIMINADA (porque historial y
+   * reportes públicos la referencian) y la bitácora de seguridad
+   * (`Auditoria`), que es un registro del sistema y no un dato de la cuenta.
    *
    * @returns Los archivos de evidencia (dentro de `uploads/`) que quedaron sin
    * dueño, para borrarlos del disco.
@@ -172,6 +190,13 @@ export class AccountRepository {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
+      // Bloquea sus reportes: si un moderador los valida o los rechaza a
+      // media eliminación, esperará a que termine y la lista de "reportes
+      // que nunca fueron públicos" no cambia entre una sentencia y otra.
+      await conn.query(
+        'SELECT id_reporte FROM Reporte WHERE id_usuario = ? FOR UPDATE',
+        [id],
+      );
       const [evidence] = await conn.query<RowDataPacket[]>(
         `SELECT e.ruta_archivo FROM Evidencia e
          JOIN Reporte r ON r.id_reporte = e.id_reporte WHERE r.id_usuario = ?`,
@@ -200,16 +225,27 @@ export class AccountRepository {
           id,
         ]);
       }
+      // Los públicos que quedan pierden el nombre de su autor.
       await conn.query(
         'UPDATE Reporte SET es_anonimo = TRUE WHERE id_usuario = ?',
         [id],
       );
+      // Tablas con una columna `id_usuario` cuyos datos son de la persona.
+      // Los nombres salen de esta lista fija (los identificadores no se
+      // pueden parametrizar); nunca vienen de entrada de usuario. Los
+      // comentarios van aquí: `Comentario.id_usuario` no tiene ON DELETE
+      // CASCADE, y como la fila de `Usuario` se conserva, sin este borrado
+      // sus textos seguirían publicados en reportes ajenos bajo "Cuenta
+      // eliminada". `Sesion` también: aunque `estado_cuenta` ya invalida los
+      // tokens, no deben quedar sesiones vivas.
       for (const table of [
         'Reporte_Guardado',
         'Reporte_Confirmacion',
+        'Comentario',
         'Notificacion_Alerta',
         'Consulta_URL',
         'Desafio_DosPasos',
+        'Sesion',
       ]) {
         await conn.query(`DELETE FROM ${table} WHERE id_usuario = ?`, [id]);
       }

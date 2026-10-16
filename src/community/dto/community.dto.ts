@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   Equals,
@@ -13,6 +13,7 @@ import {
   Length,
   Matches,
   MaxLength,
+  Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
@@ -20,6 +21,16 @@ import { RISK_LEVELS, STATUSES } from '../../common/constants';
 
 export const AFFECTED = ['YO', 'OTRA_PERSONA'] as const;
 export const SCOPES = ['feed', 'mine', 'saved', 'queue'] as const;
+
+/**
+ * Quita los espacios de las orillas ANTES de validar, para que los mínimos de
+ * longitud cuenten texto real: sin esto, diez espacios pasaban como título
+ * válido y el servicio los guardaba ya recortados, es decir, vacíos.
+ */
+const Trim = () =>
+  Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  );
 
 export class AffectedPersonDto {
   @ApiProperty({ example: 'María López' })
@@ -66,6 +77,7 @@ export class SaveCommunityReportDto {
     description: 'Obligatorio cuando `fraudType` es Otro (3 a 50)',
   })
   @ValidateIf((dto: SaveCommunityReportDto) => dto.fraudType === 'Otro')
+  @Trim()
   @IsString()
   @Length(3, 50)
   otherType?: string;
@@ -74,11 +86,13 @@ export class SaveCommunityReportDto {
     example: 'Tienda falsa de tenis en Instagram',
     description: '10 a 120',
   })
+  @Trim()
   @IsString()
   @Length(10, 120)
   title: string;
 
   @ApiProperty({ description: 'Qué pasó; 20 a 2000' })
+  @Trim()
   @IsString()
   @Length(20, 2000)
   description: string;
@@ -108,9 +122,17 @@ export class SaveCommunityReportDto {
   affectedPerson?: AffectedPersonDto;
 
   @ApiProperty({ example: 'Guadalajara', description: '2 a 60' })
+  @Trim()
   @IsString()
   @Length(2, 60)
-  @Matches(/^[^\p{N}]*\p{L}[^\p{N}]*\p{L}[^\p{N}]*$/u, {
+  // Ningún dígito y al menos dos letras. Se escribe así (y no como
+  // `^[^\p{N}]*\p{L}[^\p{N}]*\p{L}[^\p{N}]*$`) a propósito: esa forma tiene
+  // tramos que se pueden repartir las mismas letras de muchas maneras, y con
+  // un texto largo terminado en dígito el motor probaba todas (3000
+  // caracteres tardaban ~12 s; class-validator corre este patrón aunque
+  // `Length` ya haya fallado). Aquí cada tramo es excluyente y el costo es
+  // lineal.
+  @Matches(/^(?![^]*\p{N})(?:\P{L}*\p{L}){2}/u, {
     message: 'city debe ser el nombre de la ciudad, sin números',
   })
   city: string;
@@ -148,6 +170,7 @@ export class UpdateCommunityReportDto extends SaveCommunityReportDto {
   @IsArray()
   @ArrayMaxSize(10)
   @IsInt({ each: true })
+  @Min(1, { each: true })
   removeEvidenceIds?: number[];
 }
 
@@ -192,6 +215,7 @@ export class CommunityFiltersDto {
 
 export class CommentDto {
   @ApiProperty({ description: '2 a 500' })
+  @Trim()
   @IsString()
   @Length(2, 500)
   text: string;

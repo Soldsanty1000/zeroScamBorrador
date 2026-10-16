@@ -57,6 +57,20 @@ describe('checkHeuristics', () => {
     expect(result.detail).toContain('@');
   });
 
+  it('sigue detectando el @ después de que normalizeUrl quitó el usuario', () => {
+    // `normalizeUrl` deja el usuario fuera de `url` y avisa en `hasUserInfo`.
+    const result = checkHeuristics({
+      ...target('https://ejemplo.net/'),
+      hasUserInfo: true,
+    });
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain('@');
+    expect(
+      checkHeuristics({ ...target('https://ejemplo.net/'), hasUserInfo: false })
+        .passed,
+    ).toBe(true);
+  });
+
   it('detecta caracteres que imitan letras (punycode)', () => {
     const result = checkHeuristics(target('https://bancó.mx/'));
     expect(result.passed).toBe(false);

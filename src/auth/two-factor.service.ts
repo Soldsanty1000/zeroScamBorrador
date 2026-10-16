@@ -1,11 +1,12 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import {
-  createHash,
+  createHmac,
   randomBytes,
   randomInt,
   timingSafeEqual,
 } from 'node:crypto';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import { jwtSecret } from '../config';
+import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
 import { MailService } from './mail.service';
 
@@ -65,7 +66,7 @@ export class TwoFactorService {
     );
     await this.pool.query(
       'INSERT INTO Desafio_DosPasos (id_desafio, id_usuario, codigo_hash, expira) VALUES (?, ?, ?, ?)',
-      [id, userId, sha256(code), expires],
+      [id, userId, codeHash(id, code), expires],
     );
     try {
       await this.mail.sendCode(email, code, CODE_TTL_SECONDS / 60);
@@ -93,23 +94,27 @@ export class TwoFactorService {
     const invalid = new UnauthorizedException(
       'El código no es válido o ya expiró',
     );
+    // El intento se cuenta ANTES de comparar y en una sola sentencia: aunque
+    // lleguen peticiones en paralelo, ninguna prueba más de MAX_ATTEMPTS
+    // códigos por desafío.
+    const [counted] = await this.pool.query<ResultSetHeader>(
+      'UPDATE Desafio_DosPasos SET intentos = intentos + 1 WHERE id_desafio = ? AND expira > NOW() AND intentos < ?',
+      [challengeId, MAX_ATTEMPTS],
+    );
+    if (counted.affectedRows !== 1) throw invalid;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      'SELECT id_usuario, codigo_hash, intentos FROM Desafio_DosPasos WHERE id_desafio = ? AND expira > NOW()',
+      'SELECT id_usuario, codigo_hash, intentos FROM Desafio_DosPasos WHERE id_desafio = ?',
       [challengeId],
     );
     const row = rows[0];
     if (!row) throw invalid;
     const expected = Buffer.from(String(row.codigo_hash));
-    const received = Buffer.from(sha256(code));
-    if (!timingSafeEqual(expected, received)) {
-      if (Number(row.intentos) + 1 >= MAX_ATTEMPTS) {
-        await this.remove(challengeId);
-      } else {
-        await this.pool.query(
-          'UPDATE Desafio_DosPasos SET intentos = intentos + 1 WHERE id_desafio = ?',
-          [challengeId],
-        );
-      }
+    const received = Buffer.from(codeHash(challengeId, code));
+    if (
+      expected.length !== received.length ||
+      !timingSafeEqual(expected, received)
+    ) {
+      if (Number(row.intentos) >= MAX_ATTEMPTS) await this.remove(challengeId);
       throw invalid;
     }
     await this.remove(challengeId);
@@ -130,8 +135,15 @@ export class TwoFactorService {
   }
 }
 
-function sha256(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+/**
+ * Huella del código: HMAC con la llave del servidor y el id del desafío. Un
+ * código de 6 dígitos con un SHA-256 simple se recuperaría al instante si se
+ * filtrara la base; con la llave del servidor, no.
+ */
+function codeHash(challengeId: string, code: string): string {
+  return createHmac('sha256', jwtSecret())
+    .update(`2fa:${challengeId}:${code}`)
+    .digest('hex');
 }
 
 /** `usuario@0fraude.mx` → `u••••••@0fraude.mx`. */

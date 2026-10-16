@@ -6,11 +6,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { AuditService } from '../audit/audit.service';
 import type { JwtPayload } from '../auth/jwt';
 import { UsersRepository } from '../auth/users.repository';
 import { POLICE_VISIBLE_STATUSES, ROLES } from '../common/constants';
+import {
+  STORED_FILE_NAME,
+  UPLOADS_DIR,
+  mimeOfStored,
+  readStored,
+  removeStored,
+  storeUpload,
+} from '../common/files';
 import { RiskService } from '../risk/risk.service';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { CreateReportDto } from './dto/create-report.dto';
@@ -23,7 +30,15 @@ import {
 } from './dto/report-response.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
 import { Report } from './entities/report.entity';
+import {
+  AUTHOR_DELETABLE_STATUSES,
+  canTransition,
+  invalidTransition,
+} from './report-rules';
 import { ReportsRepository } from './reports.repository';
+
+/** Máximo de archivos de evidencia por reporte (igual que en la comunidad). */
+const MAX_EVIDENCE = 3;
 
 /**
  * Reglas de negocio de los reportes de fraude.
@@ -42,6 +57,7 @@ export class ReportsService {
     private readonly repository: ReportsRepository,
     private readonly users: UsersRepository,
     private readonly risk: RiskService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -105,7 +121,8 @@ export class ReportsService {
 
   /**
    * Detalle de un reporte con su historial; Administrador y Owner también
-   * reciben los datos del denunciante (CU17).
+   * reciben los datos del denunciante (CU17), salvo que el reporte sea
+   * anónimo: entonces nadie recibe `reporter`.
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
@@ -117,7 +134,9 @@ export class ReportsService {
     dto.history = (await this.repository.findHistory(id)).map((h) =>
       ReportHistoryDto.fromEntity(h),
     );
-    if (user.role === ROLES.ADMIN || user.role === ROLES.OWNER) {
+    // Un reporte anónimo no revela al autor ni a la administración: ni
+    // siquiera se consulta al usuario.
+    if (isModerator(user) && !report.anonymous) {
       const reporter = await this.users.findById(report.ownerId!);
       if (reporter) dto.reporter = ReporterDto.fromEntity(reporter);
     }
@@ -157,22 +176,25 @@ export class ReportsService {
 
   /**
    * Borra un reporte propio mientras siga en RECIBIDO (CU07), junto con los
-   * archivos de sus evidencias.
+   * archivos de sus evidencias. Queda en la bitácora (REPORTE_ELIMINADO).
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
+   * @param ip - Dirección del cliente, para la bitácora.
    * @throws {@link NotFoundException} si no existe o no es suyo.
    * @throws {@link ConflictException} si ya está en revisión.
    */
-  async remove(user: JwtPayload, id: number): Promise<void> {
+  async remove(user: JwtPayload, id: number, ip?: string): Promise<void> {
     await this.findEditable(user, id);
-    const files = await this.repository.delete(id);
+    // El repositorio vuelve a comprobar el estado con la fila bloqueada.
+    const deleted = await this.repository.delete(id, AUTHOR_DELETABLE_STATUSES);
+    await this.audit.log('REPORTE_ELIMINADO', {
+      userId: user.sub,
+      detail: `reporte ${id} (${deleted.status})`,
+      ip,
+    });
     // Si un archivo ya no está en disco no pasa nada: el reporte ya se borró.
-    await Promise.all(
-      files.map((f) =>
-        unlink(join(process.cwd(), 'uploads', f)).catch(() => undefined),
-      ),
-    );
+    await removeStored(UPLOADS_DIR, deleted.files);
   }
 
   /**
@@ -180,39 +202,57 @@ export class ReportsService {
    * (RECHAZADO, CU20), pasar a revisión o canalizar, y recalcula el riesgo
    * de sus URLs. Administrador u Owner.
    *
+   * Solo valen las transiciones de `STATUS_TRANSITIONS`: RECIBIDO ->
+   * EN_REVISION | RECHAZADO, EN_REVISION -> VALIDADO | RECHAZADO y VALIDADO
+   * -> CANALIZADO. RECHAZADO y CANALIZADO son finales. El cambio es atómico
+   * (ver `ReportsRepository.changeStatus`) y queda en la bitácora
+   * (REPORTE_ESTADO_CAMBIADO).
+   *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
    * @param data - Estado nuevo y observaciones.
+   * @param ip - Dirección del cliente, para la bitácora.
    * @throws {@link NotFoundException} si no existe.
    * @throws {@link BadRequestException} si es el mismo estado o se rechaza
    * sin motivo.
-   * @throws {@link ConflictException} si el reporte ya está en un estado final.
+   * @throws {@link ConflictException} si la transición no está permitida
+   * (incluido salir de un estado final) o el reporte cambió de estado
+   * mientras tanto.
    */
   async changeStatus(
     user: JwtPayload,
     id: number,
     data: ChangeStatusDto,
+    ip?: string,
   ): Promise<ReportResponseDto> {
     const report = await this.findVisible(user, id);
-    if (report.status === data.status) {
+    const from = report.status!;
+    if (from === data.status) {
       throw new BadRequestException('El reporte ya está en ' + data.status);
     }
-    if (await this.repository.isFinalStatus(report.status!)) {
-      throw new ConflictException(
-        'El reporte está en ' + report.status + ', que es un estado final',
-      );
+    if (!canTransition(from, data.status)) {
+      throw invalidTransition(from, data.status);
     }
     if (data.status === 'RECHAZADO' && !data.observations) {
       throw new BadRequestException(
         'Para rechazar hay que indicar el motivo en observations',
       );
     }
+    // El repositorio vuelve a comprobar `from` con la fila bloqueada: si otro
+    // administrador movió el reporte entre la lectura y aquí, responde 409.
     const updated = await this.repository.changeStatus(
       id,
       user.sub,
+      from,
       data.status,
       data.observations,
     );
+    // Solo ids y estados: las observaciones son texto libre y no van a la bitácora.
+    await this.audit.log('REPORTE_ESTADO_CAMBIADO', {
+      userId: user.sub,
+      detail: `reporte ${id}: ${from}->${data.status}`,
+      ip,
+    });
     // Validar, rechazar o canalizar cambia qué reportes cuentan para el
     // riesgo de sus URLs.
     await this.risk.refreshUrls(updated.urls!);
@@ -224,20 +264,36 @@ export class ReportsService {
 
   /**
    * Clasifica la gravedad de un reporte (CU18) y recalcula el riesgo de sus
-   * URLs. Administrador u Owner.
+   * URLs. Administrador u Owner. Un reporte RECHAZADO ya no se reclasifica;
+   * los demás estados sí. Queda en la bitácora (REPORTE_RIESGO_CAMBIADO).
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
    * @param riskLevel - BAJO, MEDIO, ALTO o MUY_ALTO.
+   * @param ip - Dirección del cliente, para la bitácora.
    * @throws {@link NotFoundException} si no existe.
+   * @throws {@link ConflictException} si el reporte está RECHAZADO.
    */
   async setRisk(
     user: JwtPayload,
     id: number,
     riskLevel: string,
+    ip?: string,
   ): Promise<ReportResponseDto> {
-    await this.findVisible(user, id);
-    const updated = await this.repository.setRisk(id, user.sub, riskLevel);
+    const report = await this.findVisible(user, id);
+    if (report.status === 'RECHAZADO') {
+      throw new ConflictException(
+        'El reporte está RECHAZADO y no se puede reclasificar',
+      );
+    }
+    // El repositorio vuelve a comprobarlo con la fila bloqueada.
+    const { report: updated, previousRiskLevel } =
+      await this.repository.setRisk(id, user.sub, riskLevel);
+    await this.audit.log('REPORTE_RIESGO_CAMBIADO', {
+      userId: user.sub,
+      detail: `reporte ${id}: ${previousRiskLevel}->${riskLevel}`,
+      ip,
+    });
     await this.risk.refreshUrls(updated.urls!);
     return ReportResponseDto.fromEntity(
       updated,
@@ -251,14 +307,20 @@ export class ReportsService {
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
+   * @param ip - Dirección del cliente, para la bitácora.
    * @returns El expediente: datos del reporte, URLs con su riesgo, evidencias
    * con su huella SHA-256 e historial. El denunciante solo va cuando exporta
-   * Administrador u Owner.
+   * Administrador u Owner y el reporte NO es anónimo. Cada exportación queda
+   * en la bitácora (REPORTE_EXPORTADO).
    * @throws {@link NotFoundException} si no existe o el rol no lo puede ver.
    * @throws {@link ConflictException} si el reporte no está VALIDADO ni
    * CANALIZADO: solo se exportan reportes verificados.
    */
-  async export(user: JwtPayload, id: number): Promise<ReportExportDto> {
+  async export(
+    user: JwtPayload,
+    id: number,
+    ip?: string,
+  ): Promise<ReportExportDto> {
     const report = await this.findVisible(user, id);
     if (!POLICE_VISIBLE_STATUSES.includes(report.status!)) {
       throw new ConflictException(
@@ -285,9 +347,11 @@ export class ReportsService {
       description: report.description!,
       incidentDate: report.incidentDate!.toISOString(),
       createdAt: report.createdAt!.toISOString(),
+      anonymous: Boolean(report.anonymous),
     };
-    // Misma regla que en `findOne`: la Policía no recibe al denunciante.
-    if (user.role === ROLES.ADMIN || user.role === ROLES.OWNER) {
+    // Misma regla que en `findOne`: la Policía no recibe al denunciante, y un
+    // reporte anónimo no lo revela a nadie.
+    if (isModerator(user) && !report.anonymous) {
       const reporter = await this.users.findById(report.ownerId!);
       if (reporter) dto.reporter = ReporterDto.fromEntity(reporter);
     }
@@ -300,41 +364,84 @@ export class ReportsService {
     dto.evidence = await Promise.all(
       evidence.map(async (e) => ({
         fileName: e.fileName,
-        path: '/uploads/' + e.fileName,
+        path: `/reports/${report.id}/evidence/${e.fileName}`,
         mimeType: e.mimeType,
         uploadedAt: e.uploadedAt.toISOString(),
         sha256: await sha256(e.fileName),
       })),
     );
     dto.history = history.map((h) => ReportHistoryDto.fromEntity(h));
+    await this.audit.log('REPORTE_EXPORTADO', {
+      userId: user.sub,
+      detail: `reporte ${id}`,
+      ip,
+    });
     return dto;
   }
 
   /**
-   * Asocia al reporte un archivo de evidencia que Multer ya dejó en
-   * `uploads/`.
+   * Asocia al reporte un archivo de evidencia (JPEG o PDF). Solo mientras el
+   * reporte siga en RECIBIDO: una vez en revisión o validado, la evidencia
+   * es parte del expediente y ya no se toca.
    *
    * @param user - Payload del access token.
    * @param id - `id_reporte`.
-   * @param file - Archivo recibido; `file.filename` es el nombre en disco.
+   * @param file - Archivo recibido en memoria; `file.buffer` es su contenido.
    * @throws {@link NotFoundException} si el reporte no existe o no es del
    * usuario del token.
+   * @throws {@link ConflictException} si el reporte ya no está en RECIBIDO.
+   * @throws {@link BadRequestException} si ya tiene el máximo de archivos.
    */
   async addEvidence(
     user: JwtPayload,
     id: number,
     file: Express.Multer.File,
   ): Promise<ReportResponseDto> {
-    const report = await this.repository.findById(id);
-    if (!report || report.ownerId !== user.sub) {
-      throw new NotFoundException('Reporte ' + id + ' no encontrado');
+    const report = await this.findEditable(user, id);
+    if (report.evidence!.length >= MAX_EVIDENCE) {
+      throw new BadRequestException(
+        `Máximo ${MAX_EVIDENCE} archivos de evidencia por reporte.`,
+      );
     }
-    const updated = (await this.repository.addEvidence(
-      id,
-      file.filename,
-      file.mimetype,
-    ))!;
-    return ReportResponseDto.fromEntity(updated, 'Evidencia agregada');
+    // El contenido real decide el tipo (JPEG o PDF); se guarda cifrado y con
+    // nombre aleatorio.
+    const stored = await storeUpload(UPLOADS_DIR, file.buffer, [
+      'image/jpeg',
+      'application/pdf',
+    ]);
+    try {
+      // El repositorio vuelve a comprobar estado y tope con la fila bloqueada.
+      const updated = (await this.repository.addEvidence(
+        id,
+        stored.fileName,
+        stored.mimeType,
+        MAX_EVIDENCE,
+      ))!;
+      return ReportResponseDto.fromEntity(updated, 'Evidencia agregada');
+    } catch (err) {
+      // Sin registro en la base el archivo quedaría huérfano en disco.
+      await removeStored(UPLOADS_DIR, [stored.fileName]);
+      throw err;
+    }
+  }
+
+  /**
+   * Los bytes de una evidencia, descifrados. Solo para quien puede ver el
+   * reporte; si no, responde igual que si no existiera.
+   * @throws {@link NotFoundException} si no existe o no es de ese reporte.
+   */
+  async evidenceFile(
+    user: JwtPayload,
+    id: number,
+    fileName: string,
+  ): Promise<{ content: Buffer; mimeType: string }> {
+    const report = await this.findVisible(user, id);
+    const content =
+      STORED_FILE_NAME.test(fileName) && report.evidence!.includes(fileName)
+        ? await readStored(UPLOADS_DIR, fileName)
+        : undefined;
+    if (!content) throw new NotFoundException('Evidencia no encontrada');
+    return { content, mimeType: mimeOfStored(fileName)! };
   }
 
   /**
@@ -374,6 +481,11 @@ export class ReportsService {
   }
 }
 
+/** Administrador y Owner moderan los reportes. */
+function isModerator(user: JwtPayload): boolean {
+  return user.role === ROLES.ADMIN || user.role === ROLES.OWNER;
+}
+
 /**
  * Folio del expediente: `ZS-<año de creación>-<id_reporte a 6 dígitos>`.
  */
@@ -390,12 +502,12 @@ function folio(report: Report): string {
  * @returns El hash en hexadecimal, o `undefined` si el archivo ya no está.
  */
 async function sha256(fileName: string): Promise<string | undefined> {
-  try {
-    const content = await readFile(join(process.cwd(), 'uploads', fileName));
-    return createHash('sha256').update(content).digest('hex');
-  } catch {
-    return undefined;
-  }
+  // Se calcula sobre el contenido ya descifrado: es la huella del archivo
+  // original, la que se puede recalcular fuera del servidor.
+  const content = await readStored(UPLOADS_DIR, fileName);
+  return content
+    ? createHash('sha256').update(content).digest('hex')
+    : undefined;
 }
 
 /**

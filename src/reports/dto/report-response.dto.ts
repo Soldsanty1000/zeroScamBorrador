@@ -29,7 +29,10 @@ export class ReportHistoryDto {
   }
 }
 
-/** Datos del denunciante; solo los ven Administrador y Owner (CU17). */
+/**
+ * Datos del denunciante; solo los ven Administrador y Owner (CU17), y nunca
+ * cuando el reporte es anónimo.
+ */
 export class ReporterDto {
   @ApiProperty({ example: '1' })
   id: string;
@@ -97,7 +100,7 @@ export class ReportResponseDto {
 
   @ApiProperty({
     type: [String],
-    example: ['/uploads/captura.png'],
+    example: ['/reports/1/evidence/3f2a9c1e5b7d4e8a9c217d4e5f6a8b90.jpg'],
     description: 'Rutas de las evidencias, relativas al servidor',
   })
   evidenceUrls: string[];
@@ -109,6 +112,14 @@ export class ReportResponseDto {
   })
   createdAt: string;
 
+  @ApiProperty({
+    description:
+      'El autor pidió no ser identificado: en el detalle y en la ' +
+      'exportación NO viene `reporter`, ni siquiera para Administrador u Owner',
+    example: false,
+  })
+  anonymous: boolean;
+
   @ApiPropertyOptional({
     type: [ReportHistoryDto],
     description: 'Cambios de estado; solo en el detalle (GET /reports/:id)',
@@ -117,7 +128,9 @@ export class ReportResponseDto {
 
   @ApiPropertyOptional({
     type: ReporterDto,
-    description: 'Denunciante; solo en el detalle y para Administrador/Owner',
+    description:
+      'Denunciante; solo en el detalle, para Administrador/Owner y si el ' +
+      'reporte NO es anónimo',
   })
   reporter?: ReporterDto;
 
@@ -134,8 +147,11 @@ export class ReportResponseDto {
     dto.incidentDate = report.incidentDate!.toISOString();
     dto.riskLevel = report.riskLevel!;
     dto.urls = report.urls!;
-    dto.evidenceUrls = report.evidence!.map((f) => '/uploads/' + f);
+    dto.evidenceUrls = report.evidence!.map(
+      (f) => `/reports/${report.id}/evidence/${f}`,
+    );
     dto.createdAt = report.createdAt!.toISOString();
+    dto.anonymous = Boolean(report.anonymous);
     dto.message = message;
     return dto;
   }

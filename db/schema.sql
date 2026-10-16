@@ -4,6 +4,8 @@ CREATE DATABASE IF NOT EXISTS ZeroScam;
 USE ZeroScam;
 
 DROP TABLE IF EXISTS Analitica_Evento;
+DROP TABLE IF EXISTS Auditoria;
+DROP TABLE IF EXISTS Sesion;
 DROP TABLE IF EXISTS Desafio_DosPasos;
 DROP TABLE IF EXISTS Comentario;
 DROP TABLE IF EXISTS Reporte_Confirmacion;
@@ -54,7 +56,7 @@ CREATE TABLE Usuario (
   pref_modo_oscuro     BOOLEAN      NOT NULL DEFAULT TRUE,
   pref_dos_pasos       BOOLEAN      NOT NULL DEFAULT FALSE,
   pref_perfil_publico  BOOLEAN      NOT NULL DEFAULT FALSE,
-  pref_analiticas      BOOLEAN      NOT NULL DEFAULT TRUE,
+  pref_analiticas      BOOLEAN      NOT NULL DEFAULT FALSE,
   version_aviso        VARCHAR(10)  NULL COMMENT 'Versión del aviso de privacidad aceptada',
   FOREIGN KEY (id_rol) REFERENCES Rol(id_rol)
 );
@@ -198,6 +200,32 @@ CREATE TABLE Comentario (
 
 -- Código pendiente de la verificación en dos pasos. Se guarda su hash, no el
 -- código; a los 3 intentos fallidos la fila se borra.
+-- Sesiones de login: cada login abre una; sus tokens llevan el id. Revocarla
+-- (cerrar sesión, cambiar contraseña) invalida todos sus tokens al instante.
+CREATE TABLE Sesion (
+  id_sesion  CHAR(32)   PRIMARY KEY,
+  id_usuario BIGINT     NOT NULL,
+  creada     DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expira     DATETIME   NOT NULL,
+  revocada   BOOLEAN    NOT NULL DEFAULT FALSE,
+  INDEX idx_sesion_usuario (id_usuario),
+  INDEX idx_sesion_expira (expira),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario) ON DELETE CASCADE
+);
+
+-- Bitácora de seguridad: inicios de sesión, cambios de rol y de estado,
+-- exportaciones, borrados. Sin contraseñas, tokens ni textos libres.
+CREATE TABLE Auditoria (
+  id_auditoria BIGINT       AUTO_INCREMENT PRIMARY KEY,
+  fecha        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  id_usuario   BIGINT       NULL,
+  accion       VARCHAR(40)  NOT NULL,
+  detalle      VARCHAR(500) NULL,
+  ip           VARCHAR(45)  NULL,
+  INDEX idx_auditoria_fecha (fecha),
+  INDEX idx_auditoria_usuario (id_usuario)
+);
+
 CREATE TABLE Desafio_DosPasos (
   id_desafio  CHAR(64)  PRIMARY KEY,
   id_usuario  BIGINT    NOT NULL,
@@ -241,9 +269,11 @@ INSERT INTO TipoFraude (nombre_tipo, descripcion) VALUES
 ('Llamada', 'Llamadas y mensajes que se hacen pasar por bancos o autoridades.'),
 ('Otro', 'Otro tipo de engaño; el detalle va en Reporte.tipo_otro.');
 
--- Cuentas de arranque para probar cada rol. Password de las tres: ZeroScam123!
--- (hash SHA-256 en hex, igual que AuthService). Cámbienlas fuera de desarrollo.
+-- Cuentas de arranque, una por rol de staff. Nacen con la contraseña
+-- DESACTIVADA ('!' no es un hash válido, nadie puede entrar con ella).
+-- `npm run build && npm run seed:staff` les pone una contraseña aleatoria y la
+-- guarda en db/CREDENCIALES-STAFF.local.txt (fuera de git).
 INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash) VALUES
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Owner'), 'Owner', 'ZeroScam', 'México', 'owner@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Administrador'), 'Admin', 'ZeroScam', 'México', 'admin@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Policia'), 'Policía', 'Cibernética', 'México', 'policia@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21');
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Owner'), 'Owner', 'ZeroScam', 'México', 'owner@zeroscam.mx', '!'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Administrador'), 'Admin', 'ZeroScam', 'México', 'admin@zeroscam.mx', '!'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Policia'), 'Policía', 'Cibernética', 'México', 'policia@zeroscam.mx', '!');

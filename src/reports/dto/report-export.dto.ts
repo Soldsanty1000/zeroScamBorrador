@@ -36,6 +36,14 @@ export class ExportReportDto {
 
   @ApiProperty({ format: 'date-time', example: '2026-09-10T18:30:00.000Z' })
   createdAt: string;
+
+  @ApiProperty({
+    description:
+      'El autor pidió no ser identificado; si es true el expediente no ' +
+      'lleva `reporter`',
+    example: false,
+  })
+  anonymous: boolean;
 }
 
 export class ExportUrlDto {
@@ -61,7 +69,7 @@ export class ExportEvidenceDto {
   fileName: string;
 
   @ApiProperty({
-    example: '/uploads/captura.png',
+    example: '/reports/1/evidence/3f2a9c1e5b7d4e8a9c217d4e5f6a8b90.jpg',
     description: 'Ruta del archivo, relativa al servidor',
   })
   path: string;
@@ -103,8 +111,8 @@ export class ReportExportDto {
   @ApiPropertyOptional({
     type: ReporterDto,
     description:
-      'Denunciante; solo cuando exporta Administrador u Owner, igual que ' +
-      'en GET /reports/:id',
+      'Denunciante; solo cuando exporta Administrador u Owner y el reporte ' +
+      'NO es anónimo, igual que en GET /reports/:id',
   })
   reporter?: ReporterDto;
 

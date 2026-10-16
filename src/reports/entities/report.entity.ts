@@ -16,6 +16,11 @@ export class Report {
   /** Nombres de archivo de `Evidencia`, dentro de uploads/. */
   evidence: string[] | undefined;
   createdAt: Date | undefined;
+  /**
+   * `es_anonimo`: el autor pidió que no se le identifique. Quien consume la
+   * entidad debe respetarlo y no mostrar sus datos personales.
+   */
+  anonymous: boolean | undefined;
 }
 
 /** Un renglón de `Historial_Estado`. */

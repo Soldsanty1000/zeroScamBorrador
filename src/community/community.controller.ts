@@ -6,6 +6,7 @@ import {
   Get,
   Header,
   HttpCode,
+  Ip,
   Param,
   ParseIntPipe,
   Patch,
@@ -21,18 +22,22 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { memoryStorage } from 'multer';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt';
 import { MAX_PDF_BYTES } from '../common/files';
+import { ErrorResponseDto } from '../common/dto/error-response.dto';
 import { CommunityService } from './community.service';
 import {
   CategoryDto,
@@ -46,6 +51,9 @@ import {
   SaveCommunityReportDto,
   UpdateCommunityReportDto,
 } from './dto/community.dto';
+
+/** Escrituras caras o abusables: 10 por minuto y por IP (el general es 120). */
+const WRITE_LIMIT = { default: { limit: 10, ttl: 60_000 } };
 
 /**
  * Rutas de la app de iOS sobre los reportes. Las de `/reports` siguen siendo
@@ -119,11 +127,18 @@ export class CommunityController {
   }
 
   @Post('reports')
+  @Throttle(WRITE_LIMIT)
   @ApiOperation({
     summary: 'Crear un reporte desde la app',
-    description: 'Nace en RECIBIDO. Máximo 10 por día.',
+    description:
+      'Nace en RECIBIDO. Máximo 10 por día, contados junto con los de ' +
+      '`POST /reports`, y 10 peticiones por minuto.',
   })
   @ApiCreatedResponse({ type: CommunityReportDto })
+  @ApiTooManyRequestsResponse({
+    description: 'Llegaste al límite de reportes por día o por minuto',
+    type: ErrorResponseDto,
+  })
   create(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SaveCommunityReportDto,
@@ -134,9 +149,15 @@ export class CommunityController {
   @Patch('reports/:id')
   @ApiOperation({
     summary: 'Editar un reporte propio',
-    description: 'Solo en RECIBIDO o EN_REVISION. Reemplaza todos los campos.',
+    description:
+      'Solo en RECIBIDO o EN_REVISION. Reemplaza todos los campos. Si un ' +
+      'moderador lo validó mientras tanto, responde 409.',
   })
   @ApiOkResponse({ type: CommunityReportDto })
+  @ApiConflictResponse({
+    description: 'El reporte ya fue revisado y no se puede editar',
+    type: ErrorResponseDto,
+  })
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
@@ -148,17 +169,29 @@ export class CommunityController {
   @Delete('reports/:id')
   @HttpCode(204)
   @ApiOperation({
-    summary: 'Eliminar un reporte propio (o cualquiera si moderas)',
+    summary: 'Eliminar un reporte',
+    description:
+      'El autor solo puede eliminar el suyo mientras está en RECIBIDO. ' +
+      'Administrador y Owner solo pueden eliminar reportes en RECIBIDO o ' +
+      'RECHAZADO. Los reportes EN_REVISION, VALIDADO o CANALIZADO no se ' +
+      'eliminan (son parte del registro de verificación) y responden 409. ' +
+      'Queda en la bitácora de seguridad.',
   })
   @ApiNoContentResponse({ description: 'Reporte eliminado, sin cuerpo' })
+  @ApiConflictResponse({
+    description: 'El estado del reporte no permite eliminarlo',
+    type: ErrorResponseDto,
+  })
   remove(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
+    @Ip() ip: string,
   ): Promise<void> {
-    return this.service.remove(user.sub, id);
+    return this.service.remove(user.sub, id, ip);
   }
 
   @Post('reports/:id/evidence')
+  @Throttle(WRITE_LIMIT)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -167,7 +200,9 @@ export class CommunityController {
   )
   @ApiOperation({
     summary: 'Adjuntar evidencia a un reporte propio',
-    description: 'JPEG (5 MB) o PDF (10 MB). Máximo 3 por reporte.',
+    description:
+      'JPEG (5 MB) o PDF (10 MB). Máximo 3 por reporte, solo mientras el ' +
+      'reporte es editable (RECIBIDO o EN_REVISION), y 10 subidas por minuto.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -178,6 +213,14 @@ export class CommunityController {
     },
   })
   @ApiCreatedResponse({ type: CommunityReportDto })
+  @ApiConflictResponse({
+    description: 'El reporte ya fue revisado y no se puede editar',
+    type: ErrorResponseDto,
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Demasiadas subidas por minuto',
+    type: ErrorResponseDto,
+  })
   addEvidence(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
@@ -230,11 +273,18 @@ export class CommunityController {
 
   @Post('reports/:id/confirmations')
   @HttpCode(200)
+  @Throttle(WRITE_LIMIT)
   @ApiOperation({
     summary: '"Yo también": confirmar un reporte público',
-    description: 'Una vez por usuario; repetirlo no cambia nada. No el propio.',
+    description:
+      'Una vez por usuario; repetirlo no cambia nada. No el propio. Máximo ' +
+      '10 peticiones por minuto.',
   })
   @ApiOkResponse({ type: CommunityReportDto })
+  @ApiTooManyRequestsResponse({
+    description: 'Demasiadas peticiones por minuto',
+    type: ErrorResponseDto,
+  })
   confirm(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
@@ -255,11 +305,18 @@ export class CommunityController {
   }
 
   @Post('reports/:id/comments')
+  @Throttle(WRITE_LIMIT)
   @ApiOperation({
     summary: 'Comentar un reporte público',
-    description: 'Máximo 5 por minuto. Avisa al autor del reporte.',
+    description:
+      'Máximo 5 por minuto por usuario (y 10 peticiones por minuto por IP). ' +
+      'Avisa al autor del reporte.',
   })
   @ApiCreatedResponse({ type: CommentResponseDto })
+  @ApiTooManyRequestsResponse({
+    description: 'Demasiados comentarios por minuto',
+    type: ErrorResponseDto,
+  })
   comment(
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,

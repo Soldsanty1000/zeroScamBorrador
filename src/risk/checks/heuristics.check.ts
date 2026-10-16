@@ -78,8 +78,9 @@ export function checkHeuristics(target: Target): CheckResult {
     add('usa una dirección IP en vez de un dominio', POINTS.ipHost);
   }
   // `https://banco.com@malo.com` lleva a malo.com: lo de antes del @ es un
-  // nombre de usuario, no el sitio.
-  if (url.username) {
+  // nombre de usuario, no el sitio. `normalizeUrl` quita el usuario de `url`
+  // y deja el aviso en `hasUserInfo`.
+  if (target.hasUserInfo ?? Boolean(url.username)) {
     add('tiene un @ que esconde el dominio real', POINTS.credentials);
   }
   // `xn--` es un dominio con caracteres no latinos: puede imitar letras

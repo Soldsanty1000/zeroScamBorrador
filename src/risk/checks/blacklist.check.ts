@@ -4,16 +4,25 @@
  *
  * Es la única verificación que depende de un servicio con llave. Sin
  * `SAFE_BROWSING_API_KEY` en `.env` no se hace la consulta y el análisis
- * sigue con las demás verificaciones.
+ * sigue con las demás verificaciones, pero queda marcado como incompleto:
+ * no estar en la lista es distinto de no haberla consultado.
+ *
+ * A Google solo le llega la URL normalizada (`esquema://host/ruta`): sin
+ * cadena de consulta, fragmento ni usuario, que es donde suelen ir datos de
+ * la víctima. Ver `normalizeUrl`.
  */
 import type { Target } from '../target';
 import { CheckResult } from './check-result';
+import { cleanText, readJsonLimited } from './external-data';
 
 /** Lookup API v4: se manda la URL y regresa las listas en las que aparece. */
 const API_URL = 'https://safebrowsing.googleapis.com/v4/threatMatches:find';
 
 /** Lo que se espera a que Google conteste, en milisegundos. */
 const TIMEOUT = 2000;
+
+/** La respuesta de Safe Browsing son pocos bytes; más que esto no se lee. */
+const MAX_BYTES = 64 * 1024;
 
 /** Estar en una lista negra es la señal más fuerte: el máximo de puntos. */
 const POINTS = 100;
@@ -32,7 +41,8 @@ const THREATS: Record<string, string> = {
  * @param target - Destino ya normalizado por `resolveTarget`.
  * @returns `passed: false` con 100 puntos y `minLevel: MUY_ALTO` si la URL
  * está en alguna lista. Si no hay llave o Google no contesta regresa
- * `passed: true` con 0 puntos y lo explica en `detail`.
+ * `verified: false` con 0 puntos y lo explica en `detail`: no se pudo
+ * verificar, que no es lo mismo que "no aparece".
  */
 export async function checkBlacklist(target: Target): Promise<CheckResult> {
   const key = process.env.SAFE_BROWSING_API_KEY;
@@ -50,7 +60,7 @@ export async function checkBlacklist(target: Target): Promise<CheckResult> {
  * Arma el resultado a partir de lo que contestó la lista negra.
  *
  * @param threats - Tipos de amenaza con los que aparece la URL (vacío si no
- * aparece); `undefined` si no se pudo consultar.
+ * aparece); `undefined` si no se pudo consultar (queda sin verificar).
  * @param reason - Por qué no se pudo consultar, cuando `threats` no viene.
  */
 export function blacklistResult(
@@ -58,7 +68,13 @@ export function blacklistResult(
   reason = 'No se pudo consultar la lista negra',
 ): CheckResult {
   if (!threats) {
-    return { name: 'blacklist', passed: true, detail: reason, points: 0 };
+    return {
+      name: 'blacklist',
+      passed: false,
+      verified: false,
+      detail: reason,
+      points: 0,
+    };
   }
   if (threats.length === 0) {
     return {
@@ -69,7 +85,9 @@ export function blacklistResult(
     };
   }
   // Set: la misma amenaza llega una vez por cada plataforma en que aplica.
-  const names = [...new Set(threats.map((t) => THREATS[t] ?? t))];
+  const names = [
+    ...new Set(threats.map((t) => THREATS[t] ?? cleanText(t, 40))),
+  ];
   return {
     name: 'blacklist',
     passed: false,
@@ -93,7 +111,11 @@ async function fetchThreats(
   try {
     const response = await fetch(API_URL, {
       method: 'POST',
+      // Un solo plazo para la consulta y la lectura de la respuesta.
       signal: AbortSignal.timeout(TIMEOUT),
+      // Google no redirige; si lo hiciera, la consulta falla en vez de
+      // mandar la URL y la llave a otro lado.
+      redirect: 'error',
       headers: {
         'content-type': 'application/json',
         // La llave va en un encabezado y no en la URL para que no quede en
@@ -110,9 +132,12 @@ async function fetchThreats(
         },
       }),
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return undefined;
+    }
     // Una URL limpia regresa `{}`, sin `matches`.
-    const body = (await response.json()) as {
+    const body = (await readJsonLimited(response, MAX_BYTES)) as {
       matches?: { threatType: string }[];
     };
     return (body.matches ?? []).map((m) => m.threatType);

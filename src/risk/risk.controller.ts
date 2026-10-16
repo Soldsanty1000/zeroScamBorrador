@@ -12,9 +12,12 @@ import {
   ApiBearerAuth,
   ApiOkResponse,
   ApiOperation,
+  ApiServiceUnavailableResponse,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt';
@@ -58,15 +61,24 @@ export class RiskController {
   }
 
   @Post('analyze')
+  // Cada análisis abre DNS, TLS, RDAP y Safe Browsing hacia afuera: tiene un
+  // tope propio, mucho más bajo que el global.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @ApiOperation({
     summary: 'Analizar una URL (RF07)',
     description:
       'Cualquier rol. Normaliza la URL, corre las verificaciones y regresa ' +
       'el nivel de riesgo con el detalle de cada una. Un sitio que no ' +
-      'responde no es un error: regresa 200 con la advertencia. Queda ' +
+      'responde no es un error: regresa 200 con la advertencia. Solo se ' +
+      'analiza y se guarda `esquema://host[:puerto]/ruta`: la cadena de ' +
+      'consulta, el fragmento y el usuario:clave@ se descartan. Si alguna ' +
+      'verificación no se pudo completar (un servicio externo o el sitio ' +
+      'no contestó) regresa `degraded: true`: el nivel puede ser más bajo ' +
+      'de lo real y el resultado solo se reutiliza unos minutos. Queda ' +
       'anotado que el usuario la consultó: si su riesgo sube después a ' +
-      'ALTO o MUY_ALTO recibe una notificación (RF08).',
+      'ALTO o MUY_ALTO recibe una notificación (RF08). Límite: 10 ' +
+      'análisis por minuto.',
   })
   @ApiOkResponse({ type: AnalyzeResponseDto })
   @ApiBadRequestResponse({
@@ -74,6 +86,14 @@ export class RiskController {
       'URL inválida, con un puerto distinto de 80/443 o que apunta a una ' +
       'dirección interna',
     type: ValidationErrorResponseDto,
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Más de 10 análisis en un minuto',
+    type: ErrorResponseDto,
+  })
+  @ApiServiceUnavailableResponse({
+    description: 'El servidor ya tiene demasiados análisis en curso',
+    type: ErrorResponseDto,
   })
   analyze(
     @CurrentUser() user: JwtPayload,

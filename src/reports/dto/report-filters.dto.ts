@@ -5,6 +5,7 @@ import {
   IsNumberString,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 import { STATUSES } from '../../common/constants';
 
@@ -18,6 +19,7 @@ export class ReportFiltersDto {
   @ApiPropertyOptional({ example: '1' })
   @IsOptional()
   @IsNumberString()
+  @MaxLength(18)
   fraudTypeId?: string;
 
   @ApiPropertyOptional({
@@ -37,11 +39,13 @@ export class ReportFiltersDto {
   to?: string;
 
   @ApiPropertyOptional({
-    description: 'Palabra clave en la descripción',
+    description: 'Palabra clave en la descripción (hasta 100 caracteres)',
     example: 'banco',
+    maxLength: 100,
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   q?: string;
 
   @ApiPropertyOptional({
@@ -50,5 +54,6 @@ export class ReportFiltersDto {
   })
   @IsOptional()
   @IsNumberString()
+  @MaxLength(18)
   userId?: string;
 }

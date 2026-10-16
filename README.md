@@ -18,18 +18,29 @@ Proyecto del curso **Seguridad informática** (TC2007B, Ago–Dic 2026).
 
 ```bash
 npm install
-cp .env.example .env               # y pon tu usuario/password de MySQL
-mysql -u root -p < db/schema.sql     # crea la base `ZeroScam` (borra lo que haya)
-npm run start:dev                     # http://localhost:3000
+cp .env.example .env                 # llena JWT_SECRET y EVIDENCE_KEY (ver abajo)
+# Crea la base ZeroScam desde db/schema.sql (BORRA lo que haya en esa
+# base; hay que confirmarlo con CONFIRMAR_BORRADO=si) y un usuario de MySQL SIN permisos de administrador para la API.
+# Usa las credenciales de administrador SOLO en este comando; no se guardan:
+CONFIRMAR_BORRADO=si DATABASE_ADMIN_URL='mysql://root:TU_PASSWORD@localhost:3306/ZeroScam' npm run setup:db
+npm run build && npm run seed:staff  # contraseñas aleatorias para las cuentas de staff
+npm run start:dev                    # http://127.0.0.1:3000
 ```
 
-Si cambias `.env` con el servidor corriendo, reinícialo: el modo watch solo
-recarga cuando cambia algo en `src/`.
+La API NO arranca sin `JWT_SECRET` (mínimo 32 caracteres, `openssl rand -base64 48`)
+ni `EVIDENCE_KEY` (32 bytes en base64, `openssl rand -base64 32`). Si cambias
+`.env` con el servidor corriendo, reinícialo.
+
+Por defecto la API solo escucha en `127.0.0.1`. Para que un iPhone o el panel
+de otra PC lleguen, pon `HOST=0.0.0.0` en `.env` (y de preferencia `TLS_KEY_FILE`
+y `TLS_CERT_FILE`, por ejemplo con `mkcert`).
 
 ### Cuentas de prueba
 
-`db/schema.sql` crea una cuenta por rol de staff. Password de las tres:
-`ZeroScam123!`. Las cuentas de rol Usuario se crean con `POST /auth/register`.
+`db/schema.sql` crea una cuenta por rol de staff con la contraseña **desactivada**.
+`npm run seed:staff` les pone una contraseña aleatoria y la guarda en
+`db/CREDENCIALES-STAFF.local.txt` (permisos 600, fuera de git); no se imprime.
+Las cuentas de rol Usuario se crean con `POST /auth/register`.
 
 | Email                 | Rol           |
 |-----------------------|---------------|
@@ -39,16 +50,20 @@ recarga cuando cambia algo en `src/`.
 
 ## Configuración
 
-| Variable / valor | Dónde está hoy                      | Descripción                                |
-|------------------|-------------------------------------|--------------------------------------------|
-| `DATABASE_URL`   | `.env` (ver `.env.example`)         | Cadena de conexión a MySQL (base `ZeroScam`) |
-| `SAFE_BROWSING_API_KEY` | `.env` (opcional)            | Llave de Google Safe Browsing para las listas negras de `/risk/analyze` |
-| `SMTP_URL`       | `.env` (opcional)                   | Servidor de correo para el código de dos pasos, p. ej. `smtp://localhost:1025` |
-| `MAIL_FROM`      | `.env` (opcional)                   | Remitente de esos correos |
-| `SECRET`         | `src/auth/jwt.ts`                   | Llave HMAC con la que se firman los tokens |
+| Variable        | Obligatoria | Descripción |
+|-----------------|-------------|-------------|
+| `DATABASE_URL`  | sí | Conexión a MySQL con un usuario de mínimo privilegio (SELECT/INSERT/UPDATE/DELETE). Nunca `root`. |
+| `JWT_SECRET`    | sí | Llave de firma de los tokens, mínimo 32 caracteres. |
+| `EVIDENCE_KEY`  | sí | Llave AES-256 (32 bytes en base64) con la que se cifran evidencias y avatares en disco. Respáldala: sin ella no se pueden leer. |
+| `HOST`, `PORT`  | no | Dónde escucha. Por defecto `127.0.0.1:3000`. |
+| `CORS_ORIGINS`  | no | Orígenes web autorizados, por defecto el panel (`http://localhost:3001`). |
+| `TLS_KEY_FILE`, `TLS_CERT_FILE` | no | Activan HTTPS. |
+| `SAFE_BROWSING_API_KEY` | no | Listas negras de `/risk/analyze`. Sin ella el análisis se marca como incompleto (`degraded`). |
+| `SMTP_URL`, `MAIL_FROM` | no | Correo del código de dos pasos. Sin SMTP el login con 2FA responde 503 (salvo `DEV_LOG_2FA_CODES=true` en desarrollo). |
+| `SWAGGER_USER`, `SWAGGER_PASSWORD` | no | En producción Swagger solo se publica si se definen (con autenticación básica). |
 
-`DATABASE_URL` va en `.env`, que no se sube a git: cada quien pone la de su
-MySQL. `SECRET` sigue escrito en el código.
+`.env` no se sube a git. Ver [SECURITY.md](SECURITY.md) para el detalle de las
+medidas de seguridad y lo que queda pendiente.
 
 ## Roles
 

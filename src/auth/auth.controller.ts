@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   HttpCode,
+  Ip,
   Patch,
   Post,
   UseGuards,
@@ -16,8 +17,10 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import {
   ErrorResponseDto,
   ValidationErrorResponseDto,
@@ -43,6 +46,7 @@ export class AuthController {
   constructor(private readonly service: AuthService) {}
 
   @Post('register')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({
     summary: 'Registrar un usuario',
     description:
@@ -63,6 +67,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @ApiOperation({
     summary: 'Iniciar sesión',
@@ -78,18 +83,24 @@ export class AuthController {
     type: ValidationErrorResponseDto,
   })
   @ApiUnauthorizedResponse({
-    description: 'El usuario no existe o el password es incorrecto',
+    description:
+      'Correo o contraseña incorrectos (mismo mensaje en ambos casos)',
+    type: ErrorResponseDto,
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Demasiados intentos fallidos: espera antes de reintentar',
     type: ErrorResponseDto,
   })
   @ApiForbiddenResponse({
     description: 'La cuenta está suspendida',
     type: ErrorResponseDto,
   })
-  login(@Body() dto: LoginDto) {
-    return this.service.login(dto);
+  login(@Body() dto: LoginDto, @Ip() ip: string) {
+    return this.service.login(dto, ip);
   }
 
   @Post('two-factor/verify')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @ApiOperation({
     summary: 'Segundo paso del login',
@@ -106,11 +117,12 @@ export class AuthController {
     description: 'Código incorrecto, expirado o sin intentos',
     type: ErrorResponseDto,
   })
-  verifyCode(@Body() dto: VerifyCodeDto) {
-    return this.service.verifyCode(dto);
+  verifyCode(@Body() dto: VerifyCodeDto, @Ip() ip: string) {
+    return this.service.verifyCode(dto, ip);
   }
 
   @Post('refresh')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @ApiOperation({
     summary: 'Renovar el access token',
@@ -138,18 +150,21 @@ export class AuthController {
   @ApiOperation({
     summary: 'Cerrar sesión (CU03, CU10, CU15)',
     description:
-      'Los tokens no se guardan en el servidor, así que cerrar sesión es ' +
-      'responsabilidad de la app: al recibir 204 borra el accessToken y el ' +
-      'refreshToken que tenga guardados.',
+      'Revoca la sesión del token en el servidor: su accessToken y su ' +
+      'refreshToken dejan de valer de inmediato. La app además borra los ' +
+      'tokens que tenga guardados.',
   })
   @ApiNoContentResponse({ description: 'Sesión cerrada, sin cuerpo' })
   @ApiUnauthorizedResponse({
     description: 'Falta el token, o es inválido o expiró',
     type: ErrorResponseDto,
   })
-  logout(): void {}
+  logout(@CurrentUser() user: JwtPayload, @Ip() ip: string): Promise<void> {
+    return this.service.logout(user, ip);
+  }
 
   @Patch('password')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(204)
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
@@ -157,8 +172,8 @@ export class AuthController {
     summary: 'Cambiar mi password',
     description:
       'Cualquier rol. Pide el password actual y el nuevo, que debe cumplir ' +
-      'las reglas del registro. Los tokens ya emitidos siguen sirviendo ' +
-      'hasta que expiran.',
+      'las reglas del registro. Cierra todas las demás sesiones de la ' +
+      'cuenta; la sesión que hace el cambio sigue abierta.',
   })
   @ApiNoContentResponse({ description: 'Password cambiado, sin cuerpo' })
   @ApiBadRequestResponse({
@@ -173,7 +188,8 @@ export class AuthController {
   changePassword(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangePasswordDto,
+    @Ip() ip: string,
   ): Promise<void> {
-    return this.service.changePassword(user.sub, dto);
+    return this.service.changePassword(user, dto, ip);
   }
 }
