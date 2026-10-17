@@ -23,15 +23,18 @@ const NEW_CERTIFICATE_DAYS = 7;
 const POINTS = {
   noHttps: 20,
   invalid: 35,
-  // El servidor no manda el certificado intermedio: el navegador lo completa
-  // solo y el sitio abre normal. Es un error de configuración, no de fraude.
-  incompleteChain: 10,
   expired: 40,
   recent: 10,
 };
 
-/** Códigos de Node para una cadena a la que le falta el intermedio. */
-const INCOMPLETE_CHAIN = [
+/**
+ * Códigos que da tanto una cadena a la que el servidor no le mandó el
+ * intermedio (error de configuración que el navegador suele completar) como
+ * un certificado de una autoridad privada. Sin desactivar la validación no
+ * se pueden distinguir, así que puntúa igual que cualquier certificado no
+ * confiable; solo el mensaje lo aclara.
+ */
+const UNVERIFIED_ISSUER = [
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
   'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
 ];
@@ -72,11 +75,11 @@ export async function checkCertificate(
     if (peer.error === 'CERT_HAS_EXPIRED') {
       return result('EXPIRADO', POINTS.expired, 'El certificado ya venció');
     }
-    if (INCOMPLETE_CHAIN.includes(peer.error)) {
+    if (UNVERIFIED_ISSUER.includes(peer.error)) {
       return result(
         'INSEGURO',
-        POINTS.incompleteChain,
-        'El servidor no envía la cadena completa del certificado (error de configuración; el navegador suele completarla)',
+        POINTS.invalid,
+        'No se puede verificar quién emitió el certificado: puede ser una autoridad no confiable o un servidor mal configurado que no envía la cadena completa',
       );
     }
     return result(

@@ -80,8 +80,6 @@ describe('checkHeuristics', () => {
 
   it('no marca la infraestructura ni los dominios de otra marca oficial', () => {
     for (const url of [
-      'https://fonts.googleapis.com/',
-      'https://s3.amazonaws.com/',
       'https://cloud.microsoft/',
       'https://www.bancoppel.com/',
       'https://www.google.de/',
@@ -91,10 +89,24 @@ describe('checkHeuristics', () => {
     }
   });
 
-  it('no acepta una marca global en una terminación de país abusada', () => {
+  it('no deduce dominios por país del nombre de la marca', () => {
     expect(checkHeuristics(target('https://paypal.tk/')).detail).toContain(
       'paypal',
     );
+    expect(checkHeuristics(target('https://paypal.com.co/')).detail).toContain(
+      'paypal',
+    );
+  });
+
+  it('analiza el subdominio del cliente en un hosting compartido', () => {
+    const bucket = checkHeuristics(
+      target('https://bbva-seguridad.s3.amazonaws.com/'),
+    );
+    expect(bucket.detail).toContain('bbva');
+    expect(bucket.detail).toContain('hosting');
+    expect(
+      checkHeuristics(target('https://s3.amazonaws.com/')).detail,
+    ).not.toContain('amazon"');
   });
 
   it('no castiga un dominio internacional escrito en su alfabeto', () => {

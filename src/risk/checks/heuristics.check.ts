@@ -62,7 +62,6 @@ const BRANDS: Record<string, string[]> = {
   amazon: [
     'amazon.com.mx',
     'amazon.com',
-    'amazonaws.com',
     'amazon.dev',
     'media-amazon.com',
     'amazonvideo.com',
@@ -86,8 +85,6 @@ const BRANDS: Record<string, string[]> = {
   google: [
     'google.com',
     'google.com.mx',
-    'googleapis.com',
-    'googleusercontent.com',
     'googlevideo.com',
     'googletagmanager.com',
     'googlesyndication.com',
@@ -102,7 +99,6 @@ const BRANDS: Record<string, string[]> = {
   microsoft: [
     'microsoft.com',
     'microsoftonline.com',
-    'microsoftpersonalcontent.com',
     'live.com',
     'office.com',
     'outlook.com',
@@ -118,22 +114,85 @@ const BRANDS: Record<string, string[]> = {
 };
 
 /**
- * Marcas globales con un dominio por país (`google.de`, `amazon.co.uk`):
- * `<marca>.<país>` cuenta como oficial, salvo en las terminaciones de país
- * que más se abusan.
+ * Dominios por país de las marcas globales que sí son suyos. Va como lista
+ * explícita: deducirlo del nombre (`<marca>.<país>`) aceptaría también un
+ * `paypal.com.co` registrado por cualquiera.
  */
-const GLOBAL_BRANDS = [
-  'google',
-  'amazon',
-  'apple',
-  'microsoft',
-  'dhl',
-  'netflix',
-  'facebook',
-  'paypal',
-  'uber',
+const COUNTRY_DOMAINS = [
+  ...[
+    'de',
+    'es',
+    'fr',
+    'it',
+    'nl',
+    'pl',
+    'ca',
+    'cn',
+    'co.uk',
+    'co.jp',
+    'co.in',
+    'com.br',
+    'com.ar',
+    'com.co',
+    'com.hk',
+    'com.au',
+    'cl',
+  ].map((cc) => `google.${cc}`),
+  ...[
+    'de',
+    'es',
+    'fr',
+    'it',
+    'nl',
+    'pl',
+    'se',
+    'ca',
+    'cn',
+    'in',
+    'sg',
+    'ae',
+    'sa',
+    'co.uk',
+    'co.jp',
+    'co.za',
+    'com.br',
+    'com.au',
+    'com.tr',
+  ].map((cc) => `amazon.${cc}`),
+  'dhl.es',
+  'dhl.co.uk',
 ];
-const ABUSED_CC = ['tk', 'ml', 'ga', 'cf', 'gq'];
+
+/**
+ * Hosting compartido: cualquiera crea ahí un subdominio
+ * (`banco-seguridad.s3.amazonaws.com`). El dominio en sí no imita a nadie,
+ * pero lo que va antes lo escribe el cliente y se analiza igual.
+ */
+const SHARED_HOSTING = [
+  'amazonaws.com',
+  'cloudfront.net',
+  'googleapis.com',
+  'googleusercontent.com',
+  'appspot.com',
+  'firebaseapp.com',
+  'web.app',
+  'microsoftpersonalcontent.com',
+  'azurewebsites.net',
+  'blob.core.windows.net',
+  'github.io',
+  'vercel.app',
+  'netlify.app',
+  'pages.dev',
+  'workers.dev',
+  'herokuapp.com',
+  'onrender.com',
+  'blogspot.com',
+  'wixsite.com',
+  'weebly.com',
+  '000webhostapp.com',
+  'ngrok.io',
+  'ngrok-free.app',
+];
 
 /** Marcas dueñas de su propia terminación: todo `*.google` es de Google. */
 const BRAND_TLDS = ['google', 'microsoft', 'apple', 'amazon'];
@@ -278,6 +337,7 @@ const POINTS = {
   brand: 35,
   government: 35,
   bait: 10,
+  sharedHosting: 10,
   abusedTld: 10,
   subdomains: 10,
   longUrl: 5,
@@ -301,8 +361,13 @@ export function checkHeuristics(target: Target): CheckResult {
   const ip = Boolean(isIP(target.hostname));
   // El host como se lee: `xn--` decodificado a sus letras reales.
   const unicode = ip ? target.hostname : domainToUnicode(target.hostname);
-  const labels = unicode.split('.');
-  const official = !ip && isOfficial(target.hostname);
+  const allLabels = unicode.split('.');
+  const hosting = ip ? undefined : sharedHosting(target.hostname);
+  // En hosting compartido solo cuenta lo que escribió el cliente.
+  const labels = hosting
+    ? allLabels.slice(0, allLabels.length - hosting.split('.').length)
+    : allLabels;
+  const official = !ip && !hosting && isOfficial(target.hostname);
 
   if (ip) {
     add('usa una dirección IP en vez de un dominio', POINTS.ipHost);
@@ -312,7 +377,13 @@ export function checkHeuristics(target: Target): CheckResult {
   if (url.username) {
     add('tiene un @ que esconde el dominio real', POINTS.credentials);
   }
-  if (!ip && !official) {
+  if (hosting && labels.length > 0) {
+    add(
+      `está en un hosting donde cualquiera puede publicar (${hosting})`,
+      POINTS.sharedHosting,
+    );
+  }
+  if (!ip && !official && labels.length > 0) {
     // Un dominio internacional escrito todo en su alfabeto es normal; lo
     // sospechoso es mezclar alfabetos en una palabra (una "а" cirílica entre
     // letras latinas) o acentos que hacen pasar una letra por otra.
@@ -375,15 +446,17 @@ export function checkHeuristics(target: Target): CheckResult {
 function isOfficial(hostname: string): boolean {
   const owns = (domain: string) =>
     hostname === domain || hostname.endsWith('.' + domain);
-  // `amazon.co.uk` → marca "amazon", país "uk".
-  const country =
-    /(?:^|\.)([a-z0-9-]+)\.(?:(?:com?|org|net)\.)?([a-z]{2})$/.exec(hostname);
   return (
     Object.values(BRANDS).some((domains) => domains.some(owns)) ||
-    BRAND_TLDS.some((tld) => hostname.endsWith('.' + tld)) ||
-    (country !== null &&
-      GLOBAL_BRANDS.includes(country[1]) &&
-      !ABUSED_CC.includes(country[2]))
+    COUNTRY_DOMAINS.some(owns) ||
+    BRAND_TLDS.some((tld) => hostname.endsWith('.' + tld))
+  );
+}
+
+/** El dominio de hosting compartido del host, si está en uno. */
+function sharedHosting(hostname: string): string | undefined {
+  return SHARED_HOSTING.find(
+    (domain) => hostname === domain || hostname.endsWith('.' + domain),
   );
 }
 
