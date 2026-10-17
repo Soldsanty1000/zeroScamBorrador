@@ -10,12 +10,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { sign, verify } from './jwt';
-import {
-  DUMMY_HASH,
-  hashPassword,
-  needsRehash,
-  verifyPassword,
-} from './password';
+import { DUMMY_HASH, hashPassword, verifyPassword } from './password';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { VerifyCodeDto } from './dto/verify-code.dto';
 import { TwoFactorChallenge, TwoFactorService } from './two-factor.service';
@@ -97,14 +92,6 @@ export class AuthService {
     // cualquiera podría averiguar qué correos están registrados.
     if (!user || !ok) {
       throw new UnauthorizedException('Correo o contraseña incorrectos');
-    }
-    // Cuentas de antes del cambio a scrypt: con el password en la mano se
-    // reemplaza su hash SHA-256 por uno nuevo.
-    if (needsRehash(user.passwordHash)) {
-      await this.users.updatePassword(
-        user.id!,
-        await hashPassword(dto.password!),
-      );
     }
     // Un administrador puede desactivar cuentas (RF03): esas ya no entran.
     if (user.accountStatus !== 'ACTIVO') {

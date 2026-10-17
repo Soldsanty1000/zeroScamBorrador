@@ -126,6 +126,16 @@ No uses `http://200.0.0.50:3000`: es la IP "pública" del NAT y la app solo acep
 
 Password `ZeroScam123!`: `owner@zeroscam.mx`, `admin@zeroscam.mx`, `policia@zeroscam.mx`, `ana@zeroscam.mx`, `beto@zeroscam.mx`.
 
+## Migración de contraseñas (una sola vez)
+
+Desde el cambio a scrypt, la API ya no acepta los hashes SHA-256 de antes. Si la base se creó antes de ese cambio, después de actualizar la API corre en la PC de la base (dentro de la carpeta del repo):
+
+```powershell
+Get-Content db\migracion-scrypt.sql | docker exec -i zeroscam-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ZeroScam'
+```
+
+Actualiza las cuentas de arranque (owner, admin y policía, password `ZeroScam123!`) y lista las que sigan con el hash viejo: esas tienen que registrarse otra vez.
+
 ## Día a día
 
 | Quiero… | Dónde | Comando |

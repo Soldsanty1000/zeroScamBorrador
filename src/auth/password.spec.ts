@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { hashPassword, needsRehash, verifyPassword } from './password';
+import { hashPassword, verifyPassword } from './password';
 
 describe('password', () => {
   it('verifica el password con el que se generó el hash', async () => {
@@ -15,12 +14,11 @@ describe('password', () => {
     expect(a).not.toBe(b);
   });
 
-  it('acepta el formato SHA-256 anterior y pide regenerarlo', async () => {
-    const legacy = createHash('sha256').update('ZeroScam123!').digest('hex');
-    await expect(verifyPassword('ZeroScam123!', legacy)).resolves.toBe(true);
-    await expect(verifyPassword('otro', legacy)).resolves.toBe(false);
-    expect(needsRehash(legacy)).toBe(true);
-    expect(needsRehash(await hashPassword('x'))).toBe(false);
+  it('rechaza cualquier hash que no sea scrypt (el SHA-256 de antes)', async () => {
+    // 64 caracteres hexadecimales: el formato del hash anterior.
+    await expect(verifyPassword('ZeroScam123!', 'a'.repeat(64))).resolves.toBe(
+      false,
+    );
   });
 
   it('rechaza hashes vacíos o de cuentas eliminadas', async () => {

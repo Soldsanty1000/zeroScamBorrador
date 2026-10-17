@@ -242,8 +242,8 @@ INSERT INTO TipoFraude (nombre_tipo, descripcion) VALUES
 ('Otro', 'Otro tipo de engaño; el detalle va en Reporte.tipo_otro.');
 
 -- Cuentas de arranque para probar cada rol. Password de las tres: ZeroScam123!
--- (hash SHA-256 en hex, igual que AuthService). Cámbienlas fuera de desarrollo.
+-- (hash scrypt con sal, igual que auth/password.ts). Cámbienlas fuera de desarrollo.
 INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash) VALUES
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Owner'), 'Owner', 'ZeroScam', 'México', 'owner@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Administrador'), 'Admin', 'ZeroScam', 'México', 'admin@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21'),
-((SELECT id_rol FROM Rol WHERE nombre_rol = 'Policia'), 'Policía', 'Cibernética', 'México', 'policia@zeroscam.mx', 'de25822427b7186ec9855ad1e7bf319974a5fe426c7e57eb85293f2ad539ff21');
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Owner'), 'Owner', 'ZeroScam', 'México', 'owner@zeroscam.mx', 'scrypt:207981bdb0fc5b19b926fbea03173ecc:9c8f2ecc6047458fc4a3f87106167a9dd0446f28d87897144f81085e0cbe546392cb8e004ff9a49c88bc1b621c5f15a61f66257c81fdff1788fa926de1108311'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Administrador'), 'Admin', 'ZeroScam', 'México', 'admin@zeroscam.mx', 'scrypt:ae7fd6b7b46ae847c8a9ccc121c76943:bc05f0e2d730b1f0ec25a44e2283aec57947b7bcae50cf78eecf3d0222d8be28de3e957aec6015f7ab99015f9f9dd5279152b334dca185d7dbb22c83245a3159'),
+((SELECT id_rol FROM Rol WHERE nombre_rol = 'Policia'), 'Policía', 'Cibernética', 'México', 'policia@zeroscam.mx', 'scrypt:f288a91b25790e6eca09b9a4034e9d24:c82043c6eacad07215ad62ad3c3b48f9672222b60e0243a9e35785790118a9c5c5df00bdaaf1a01556e872d49a58967bf68bf29a5bf6aa3889d0094c896ca3f7');
