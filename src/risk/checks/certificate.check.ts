@@ -8,8 +8,11 @@ import type { PeerCertificate } from 'node:tls';
 import type { Target } from '../target';
 import { CheckResult } from './check-result';
 
-/** Lo que se espera a que el sitio conteste, en milisegundos. */
-const TIMEOUT = 2000;
+/**
+ * Lo que se espera a que el sitio conteste, en milisegundos. Con 2 s algunos
+ * sitios legítimos lentos (o detrás de un WAF) salían como inaccesibles.
+ */
+const TIMEOUT = 4000;
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -17,7 +20,21 @@ const DAY = 24 * 60 * 60 * 1000;
 const NEW_CERTIFICATE_DAYS = 7;
 
 /** Puntos de riesgo de cada resultado. */
-const POINTS = { noHttps: 20, invalid: 35, expired: 40, recent: 10 };
+const POINTS = {
+  noHttps: 20,
+  invalid: 35,
+  // El servidor no manda el certificado intermedio: el navegador lo completa
+  // solo y el sitio abre normal. Es un error de configuración, no de fraude.
+  incompleteChain: 10,
+  expired: 40,
+  recent: 10,
+};
+
+/** Códigos de Node para una cadena a la que le falta el intermedio. */
+const INCOMPLETE_CHAIN = [
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+];
 
 /** El resultado y además el valor para `SitioWeb_URL.estado_certificado`. */
 export interface CertificateResult extends CheckResult {
@@ -54,6 +71,13 @@ export async function checkCertificate(
   if ('error' in peer) {
     if (peer.error === 'CERT_HAS_EXPIRED') {
       return result('EXPIRADO', POINTS.expired, 'El certificado ya venció');
+    }
+    if (INCOMPLETE_CHAIN.includes(peer.error)) {
+      return result(
+        'INSEGURO',
+        POINTS.incompleteChain,
+        'El servidor no envía la cadena completa del certificado (error de configuración; el navegador suele completarla)',
+      );
     }
     return result(
       'INSEGURO',

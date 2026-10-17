@@ -63,6 +63,60 @@ describe('checkHeuristics', () => {
     expect(result.detail).toContain('caracteres especiales');
   });
 
+  it('detecta un sitio que aparenta ser de gobierno', () => {
+    const result = checkHeuristics(target('https://sat-gob-mx.com/'));
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain('gobierno');
+    expect(result.detail).toContain('"sat"');
+    expect(checkHeuristics(target('https://www.sat.gob.mx/')).passed).toBe(
+      true,
+    );
+  });
+
+  it('lee "rn" como "m" en marcas cortas', () => {
+    const result = checkHeuristics(target('https://arnazon.com.mx/'));
+    expect(result.detail).toContain('amazon');
+  });
+
+  it('no marca la infraestructura ni los dominios de otra marca oficial', () => {
+    for (const url of [
+      'https://fonts.googleapis.com/',
+      'https://s3.amazonaws.com/',
+      'https://cloud.microsoft/',
+      'https://www.bancoppel.com/',
+      'https://www.google.de/',
+      'https://www.amazon.co.uk/',
+    ]) {
+      expect(checkHeuristics(target(url)).passed).toBe(true);
+    }
+  });
+
+  it('no acepta una marca global en una terminación de país abusada', () => {
+    expect(checkHeuristics(target('https://paypal.tk/')).detail).toContain(
+      'paypal',
+    );
+  });
+
+  it('no castiga un dominio internacional escrito en su alfabeto', () => {
+    // пример.рф ("ejemplo" en ruso)
+    const result = checkHeuristics(target('https://xn--e1afmkfd.xn--p1ai/'));
+    expect(result.passed).toBe(true);
+  });
+
+  it('detecta letras cirílicas que se leen como una marca', () => {
+    // аррӏе.com: todo cirílico, se lee "apple"
+    const result = checkHeuristics(target('https://xn--80ak6aa92e.com/'));
+    expect(result.detail).toContain('apple');
+  });
+
+  it('palabras de anzuelo y terminaciones abusadas suman poco por sí solas', () => {
+    const result = checkHeuristics(target('https://cfe-pagos.online/'));
+    expect(result.detail).toContain('anzuelo');
+    expect(result.detail).toContain('.online');
+    const plain = checkHeuristics(target('https://mi-tienda.online/'));
+    expect(plain.points).toBeLessThan(25);
+  });
+
   it('suma las señales sin pasar de 100', () => {
     const result = checkHeuristics(
       target('http://usuario@paypa1.a.b.c.xn--banc-tqa.mx/'),

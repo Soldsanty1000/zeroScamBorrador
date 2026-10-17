@@ -3,39 +3,140 @@
  * aparecer en sitios de phishing y que se ven sin conectarse a nada.
  */
 import { isIP } from 'node:net';
+import { domainToUnicode } from 'node:url';
 import type { Target } from '../target';
 import { CheckResult } from './check-result';
 
 /**
- * Marcas que más se suplantan y sus dominios oficiales. Un host que se
- * parece a la marca pero no está en sus dominios es sospechoso.
+ * Marcas que más se suplantan en México y sus dominios oficiales, incluidos
+ * los de su propia infraestructura (CDN, APIs): un host que se parece a la
+ * marca pero no está en sus dominios es sospechoso.
  */
 const BRANDS: Record<string, string[]> = {
-  bbva: ['bbva.mx', 'bbva.com'],
+  // Bancos y pagos
+  bbva: ['bbva.mx', 'bbva.com', 'bbva.es'],
   banamex: ['banamex.com', 'citibanamex.com'],
   citibanamex: ['citibanamex.com'],
-  santander: ['santander.com.mx', 'santander.com'],
+  santander: [
+    'santander.com.mx',
+    'santander.com',
+    'santander.es',
+    'santander.de',
+    'santander.co.uk',
+    'santander.com.br',
+    'santander.cl',
+  ],
   banorte: ['banorte.com'],
-  hsbc: ['hsbc.com.mx', 'hsbc.com'],
-  scotiabank: ['scotiabank.com.mx', 'scotiabank.com'],
+  hsbc: ['hsbc.com.mx', 'hsbc.com', 'hsbc.co.uk'],
+  scotiabank: ['scotiabank.com.mx', 'scotiabank.com', 'scotiabankchile.cl'],
   bancoazteca: ['bancoazteca.com.mx'],
-  mercadolibre: ['mercadolibre.com.mx', 'mercadolibre.com'],
-  mercadopago: ['mercadopago.com.mx', 'mercadopago.com'],
-  amazon: ['amazon.com.mx', 'amazon.com'],
-  paypal: ['paypal.com'],
+  bancoppel: ['bancoppel.com'],
+  inbursa: ['inbursa.com'],
+  banregio: ['banregio.com'],
+  spei: ['banxico.org.mx'],
+  mercadolibre: [
+    'mercadolibre.com.mx',
+    'mercadolibre.com',
+    'mercadolibre.com.ar',
+    'mercadolibre.com.co',
+    'mercadolibre.cl',
+    'mercadolivre.com.br',
+    'mlstatic.com',
+  ],
+  mercadopago: ['mercadopago.com.mx', 'mercadopago.com', 'mercadopago.com.ar'],
+  paypal: ['paypal.com', 'paypalobjects.com'],
+  // Gobierno y servicios
+  sat: ['sat.gob.mx'],
+  imss: ['imss.gob.mx'],
+  issste: ['issste.gob.mx'],
+  infonavit: ['infonavit.org.mx'],
+  cfe: ['cfe.mx', 'cfe.gob.mx'],
+  telmex: ['telmex.com'],
+  telcel: ['telcel.com'],
+  // Paquetería
+  dhl: ['dhl.com', 'dhl.com.mx', 'dhl.de'],
+  fedex: ['fedex.com'],
+  estafeta: ['estafeta.com'],
+  correosdemexico: ['correosdemexico.gob.mx'],
+  // Tiendas
+  amazon: [
+    'amazon.com.mx',
+    'amazon.com',
+    'amazonaws.com',
+    'amazon.dev',
+    'media-amazon.com',
+    'amazonvideo.com',
+    'amazon-adsystem.com',
+    'ssl-images-amazon.com',
+    'amazontrust.com',
+  ],
   liverpool: ['liverpool.com.mx'],
   coppel: ['coppel.com'],
+  elektra: ['elektra.com.mx'],
   walmart: ['walmart.com.mx', 'walmart.com'],
-  telcel: ['telcel.com'],
-  netflix: ['netflix.com'],
-  spotify: ['spotify.com'],
-  facebook: ['facebook.com'],
-  instagram: ['instagram.com'],
-  whatsapp: ['whatsapp.com'],
-  google: ['google.com', 'google.com.mx'],
-  microsoft: ['microsoft.com'],
-  apple: ['apple.com'],
+  oxxo: ['oxxo.com'],
+  shein: ['shein.com', 'shein.com.mx'],
+  temu: ['temu.com'],
+  // Plataformas
+  netflix: ['netflix.com', 'netflix.net', 'nflxvideo.net', 'nflximg.net'],
+  spotify: ['spotify.com', 'spotifycdn.com', 'scdn.co'],
+  facebook: ['facebook.com', 'facebook.net', 'fbcdn.net', 'fb.com'],
+  instagram: ['instagram.com', 'cdninstagram.com'],
+  whatsapp: ['whatsapp.com', 'whatsapp.net'],
+  google: [
+    'google.com',
+    'google.com.mx',
+    'googleapis.com',
+    'googleusercontent.com',
+    'googlevideo.com',
+    'googletagmanager.com',
+    'googlesyndication.com',
+    'googleadservices.com',
+    'google-analytics.com',
+    'googledomains.com',
+    'googletagservices.com',
+    'googleblog.com',
+    'withgoogle.com',
+    'gstatic.com',
+  ],
+  microsoft: [
+    'microsoft.com',
+    'microsoftonline.com',
+    'microsoftpersonalcontent.com',
+    'live.com',
+    'office.com',
+    'outlook.com',
+  ],
+  apple: [
+    'apple.com',
+    'icloud.com',
+    'apple-dns.net',
+    'cdn-apple.com',
+    'apple-cloudkit.com',
+  ],
+  uber: ['uber.com'],
 };
+
+/**
+ * Marcas globales con un dominio por país (`google.de`, `amazon.co.uk`):
+ * `<marca>.<país>` cuenta como oficial, salvo en las terminaciones de país
+ * que más se abusan.
+ */
+const GLOBAL_BRANDS = [
+  'google',
+  'amazon',
+  'apple',
+  'microsoft',
+  'dhl',
+  'netflix',
+  'facebook',
+  'paypal',
+  'uber',
+];
+const ABUSED_CC = ['tk', 'ml', 'ga', 'cf', 'gq'];
+
+/** Marcas dueñas de su propia terminación: todo `*.google` es de Google. */
+const BRAND_TLDS = ['google', 'microsoft', 'apple', 'amazon'];
 
 /** Números que se usan para imitar letras: `paypa1`, `amaz0n`. */
 const LOOKALIKES: Record<string, string> = {
@@ -47,12 +148,137 @@ const LOOKALIKES: Record<string, string> = {
   '7': 't',
 };
 
+/**
+ * Letras cirílicas y griegas que se ven igual que una latina: `аррӏе` (todo
+ * cirílico) se lee "apple".
+ */
+const CONFUSABLES: Record<string, string> = {
+  а: 'a',
+  е: 'e',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  у: 'y',
+  х: 'x',
+  і: 'i',
+  ј: 'j',
+  ԁ: 'd',
+  ӏ: 'l',
+  ѕ: 's',
+  һ: 'h',
+  ԛ: 'q',
+  ԝ: 'w',
+  к: 'k',
+  м: 'm',
+  т: 't',
+  в: 'b',
+  н: 'h',
+  α: 'a',
+  ο: 'o',
+  ρ: 'p',
+  τ: 't',
+  ε: 'e',
+  ι: 'i',
+  κ: 'k',
+  ν: 'v',
+  υ: 'u',
+  χ: 'x',
+  β: 'b',
+};
+
+/**
+ * Palabras de anzuelo que se pegan al nombre para parecer un trámite
+ * oficial: `banco-verifica`, `paquete-retenido`.
+ */
+const BAIT = new Set([
+  'seguridad',
+  'seguro',
+  'segura',
+  'verifica',
+  'verificar',
+  'verificacion',
+  'soporte',
+  'alerta',
+  'alertas',
+  'actualiza',
+  'actualizar',
+  'actualizacion',
+  'desbloqueo',
+  'desbloquear',
+  'bloqueo',
+  'reembolso',
+  'devolucion',
+  'premio',
+  'premios',
+  'sorteo',
+  'ganador',
+  'regalo',
+  'pago',
+  'pagos',
+  'aclaracion',
+  'aclaraciones',
+  'validar',
+  'validacion',
+  'confirmar',
+  'retenido',
+  'retenida',
+  'cita',
+  'citas',
+  'enlinea',
+  'secure',
+  'verify',
+  'update',
+  'signin',
+  'unlock',
+  'wallet',
+  'bonus',
+  'refund',
+]);
+
+/**
+ * Terminaciones que, según los reportes de abuso (Spamhaus, Interisle),
+ * concentran una parte desproporcionada del phishing por ser baratas.
+ */
+const ABUSED_TLDS = new Set([
+  'xyz',
+  'top',
+  'online',
+  'site',
+  'click',
+  'icu',
+  'buzz',
+  'cyou',
+  'rest',
+  'lat',
+  'live',
+  'support',
+  'help',
+  'cfd',
+  'sbs',
+  'bond',
+  'monster',
+  'quest',
+  'work',
+  'loan',
+  'win',
+  'bid',
+  'tk',
+  'ml',
+  'ga',
+  'cf',
+  'gq',
+]);
+
 /** Puntos de riesgo de cada señal. */
 const POINTS = {
   ipHost: 30,
   credentials: 25,
-  punycode: 20,
+  mixedScripts: 30,
+  accents: 10,
   brand: 35,
+  government: 35,
+  bait: 10,
+  abusedTld: 10,
   subdomains: 10,
   longUrl: 5,
 };
@@ -72,9 +298,13 @@ export function checkHeuristics(target: Target): CheckResult {
     points += value;
   };
   const url = new URL(target.url);
-  const labels = target.hostname.split('.');
+  const ip = Boolean(isIP(target.hostname));
+  // El host como se lee: `xn--` decodificado a sus letras reales.
+  const unicode = ip ? target.hostname : domainToUnicode(target.hostname);
+  const labels = unicode.split('.');
+  const official = !ip && isOfficial(target.hostname);
 
-  if (isIP(target.hostname)) {
+  if (ip) {
     add('usa una dirección IP en vez de un dominio', POINTS.ipHost);
   }
   // `https://banco.com@malo.com` lleva a malo.com: lo de antes del @ es un
@@ -82,16 +312,43 @@ export function checkHeuristics(target: Target): CheckResult {
   if (url.username) {
     add('tiene un @ que esconde el dominio real', POINTS.credentials);
   }
-  // `xn--` es un dominio con caracteres no latinos: puede imitar letras
-  // (homóglifos), como una "а" cirílica en vez de la "a".
-  if (labels.some((label) => label.startsWith('xn--'))) {
-    add('usa caracteres especiales que pueden imitar letras', POINTS.punycode);
+  if (!ip && !official) {
+    // Un dominio internacional escrito todo en su alfabeto es normal; lo
+    // sospechoso es mezclar alfabetos en una palabra (una "а" cirílica entre
+    // letras latinas) o acentos que hacen pasar una letra por otra.
+    if (labels.some(mixesScripts)) {
+      add(
+        'mezcla letras de distintos alfabetos para imitar otras',
+        POINTS.mixedScripts,
+      );
+    } else if (labels.some((label) => /[à-ÿ]/i.test(label))) {
+      add(
+        'usa caracteres especiales (acentos) que se confunden con letras normales',
+        POINTS.accents,
+      );
+    }
+    const brand = imitatedBrand(labels);
+    if (brand) {
+      add(`se parece a "${brand}" pero no es su dominio oficial`, POINTS.brand);
+    }
+    if (posesAsGovernment(labels)) {
+      add(
+        'aparenta ser de gobierno pero no es un dominio .gob.mx',
+        POINTS.government,
+      );
+    }
+    const bait = words(labels).find((word) => BAIT.has(word));
+    if (bait) {
+      add(`usa una palabra de anzuelo ("${bait}")`, POINTS.bait);
+    }
+    if (ABUSED_TLDS.has(labels[labels.length - 1])) {
+      add(
+        `usa una terminación muy usada en fraudes (.${labels[labels.length - 1]})`,
+        POINTS.abusedTld,
+      );
+    }
   }
-  const brand = isIP(target.hostname) ? undefined : imitatedBrand(labels);
-  if (brand) {
-    add(`se parece a "${brand}" pero no es su dominio oficial`, POINTS.brand);
-  }
-  if (!isIP(target.hostname) && labels.length >= 5) {
+  if (!ip && labels.length >= 5) {
     add('tiene demasiados subdominios', POINTS.subdomains);
   }
   if (target.url.length > 150) {
@@ -114,27 +371,56 @@ export function checkHeuristics(target: Target): CheckResult {
   };
 }
 
+/** `true` si el host es de una marca de la lista o de su terminación propia. */
+function isOfficial(hostname: string): boolean {
+  const owns = (domain: string) =>
+    hostname === domain || hostname.endsWith('.' + domain);
+  // `amazon.co.uk` → marca "amazon", país "uk".
+  const country =
+    /(?:^|\.)([a-z0-9-]+)\.(?:(?:com?|org|net)\.)?([a-z]{2})$/.exec(hostname);
+  return (
+    Object.values(BRANDS).some((domains) => domains.some(owns)) ||
+    BRAND_TLDS.some((tld) => hostname.endsWith('.' + tld)) ||
+    (country !== null &&
+      GLOBAL_BRANDS.includes(country[1]) &&
+      !ABUSED_CC.includes(country[2]))
+  );
+}
+
+/** Las palabras del host: `bbva-seguro.login.com` → bbva, seguro, login, com. */
+function words(labels: string[]): string[] {
+  return labels.flatMap((label) => label.split('-')).filter(Boolean);
+}
+
+/**
+ * Formas en que se lee una palabra: tal cual, sin acentos, con las letras
+ * cirílicas o griegas que imitan latinas cambiadas, con números en vez de
+ * letras (`paypa1` → paypal) y con pares que se confunden ("rn" → "m",
+ * "vv" → "w").
+ */
+function readings(word: string): string[] {
+  const latin = [...word.normalize('NFD').replace(/\p{M}/gu, '')]
+    .map((char) => CONFUSABLES[char] ?? char)
+    .join('');
+  const digits = latin.replace(/[013457]/g, (digit) => LOOKALIKES[digit]);
+  const pairs = (text: string) => text.replace(/rn/g, 'm').replace(/vv/g, 'w');
+  return [...new Set([word, latin, digits, pairs(latin), pairs(digits)])];
+}
+
 /**
  * Marca que el host intenta imitar (typosquatting), si hay alguna.
  *
- * @param labels - El host partido por puntos.
- * @returns El nombre de la marca, o `undefined` si el host es un dominio
- * oficial o no se parece a ninguna.
+ * @param labels - El host ya decodificado, partido por puntos.
+ * @returns El nombre de la marca, o `undefined` si no se parece a ninguna.
  */
 function imitatedBrand(labels: string[]): string | undefined {
-  const hostname = labels.join('.');
-  // `bbva-seguro.login.com` → bbva, seguro, login, com.
-  const words = labels.flatMap((label) => label.split('-')).map(unmask);
-  for (const [brand, domains] of Object.entries(BRANDS)) {
-    const official = domains.some(
-      (d) => hostname === d || hostname.endsWith('.' + d),
-    );
-    if (official) continue;
+  const candidates = words(labels).flatMap(readings);
+  for (const brand of Object.keys(BRANDS)) {
     // Entre más larga la marca, más errores de dedo se toleran. Las cortas
-    // (bbva, hsbc) solo cuentan si aparecen exactas: a una letra de
+    // (sat, dhl, bbva) solo cuentan si aparecen exactas: a una letra de
     // distancia hay demasiadas palabras normales.
     const tolerance = brand.length >= 8 ? 2 : brand.length >= 5 ? 1 : 0;
-    const similar = words.some(
+    const similar = candidates.some(
       (word) =>
         distance(word, brand) <= tolerance ||
         (brand.length >= 5 && word.includes(brand)),
@@ -144,9 +430,28 @@ function imitatedBrand(labels: string[]): string | undefined {
   return undefined;
 }
 
-/** Cambia los números que imitan letras por la letra: `paypa1` → `paypal`. */
-function unmask(word: string): string {
-  return word.replace(/[013457]/g, (digit) => LOOKALIKES[digit]);
+/**
+ * `true` si el host usa "gob" o "gov" sin ser un dominio de gobierno:
+ * `sat-gob-mx.com` aparenta serlo, `sat.gob.mx` sí lo es.
+ */
+function posesAsGovernment(labels: string[]): boolean {
+  const host = labels.join('.');
+  const real = /(^|\.)(gob|gov)(\.[a-z]{2})?$/.test(host);
+  return (
+    !real &&
+    words(labels).some(
+      (word) => word === 'gob' || word === 'gov' || word.startsWith('gobierno'),
+    )
+  );
+}
+
+/** `true` si una palabra mezcla letras latinas con cirílicas o griegas. */
+function mixesScripts(label: string): boolean {
+  const latin = /\p{Script=Latin}/u.test(label);
+  const other = /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(label);
+  // Todo en cirílico pero que se lee como una marca también engaña; eso lo
+  // atrapa `imitatedBrand` con sus lecturas.
+  return latin && other;
 }
 
 /**

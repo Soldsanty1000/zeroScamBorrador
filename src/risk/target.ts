@@ -16,7 +16,8 @@ import { BlockList, isIP } from 'node:net';
 const ALLOWED_PORTS = [80, 443];
 
 /** Lo que se espera a que el DNS conteste, en milisegundos. */
-const DNS_TIMEOUT = 2000;
+// En redes con DNS lento (la del Tec) 2 s dejaba sitios reales como inaccesibles.
+const DNS_TIMEOUT = 3000;
 
 /** Rangos que no son de internet: loopback, redes privadas, link-local, etc. */
 const PRIVATE = new BlockList();
