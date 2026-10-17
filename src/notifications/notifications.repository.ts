@@ -36,8 +36,9 @@ export class NotificationsRepository {
     const unread = onlyUnread ? 'AND n.leido_estatus = FALSE' : '';
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM ${FROM}
-       WHERE n.id_usuario = '${userId}' ${unread}
+       WHERE n.id_usuario = ? ${unread}
        ORDER BY n.fecha_envio DESC, n.id_notificacion DESC`,
+      [userId],
     );
     return rows.map(toEntity);
   }
@@ -55,11 +56,13 @@ export class NotificationsRepository {
   ): Promise<Notification | undefined> {
     const [result] = await this.pool.query<ResultSetHeader>(
       `UPDATE Notificacion_Alerta SET leido_estatus = TRUE
-       WHERE id_notificacion = ${id} AND id_usuario = '${userId}'`,
+       WHERE id_notificacion = ? AND id_usuario = ?`,
+      [id, userId],
     );
     if (result.affectedRows === 0) return undefined;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM ${FROM} WHERE n.id_notificacion = ${id}`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE n.id_notificacion = ?`,
+      [id],
     );
     return toEntity(rows[0]);
   }

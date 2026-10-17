@@ -8,6 +8,8 @@ import { DB_POOL } from '../database/database.module';
 import { Contact } from './entities/contact.entity';
 
 const COLUMNS = 'id, owner_id, name, email, phone, notes, photo, created_at';
+/** Columnas que un PATCH puede cambiar; se llaman igual que los campos del DTO. */
+const EDITABLE = ['name', 'email', 'phone', 'notes'] as const;
 
 /**
  * Acceso a la tabla `contacts` de MySQL.
@@ -29,7 +31,8 @@ export class ContactsRepository {
    */
   async findAll(ownerId: string): Promise<Contact[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM contacts WHERE owner_id = '${ownerId}' ORDER BY created_at`,
+      `SELECT ${COLUMNS} FROM contacts WHERE owner_id = ? ORDER BY created_at`,
+      [ownerId],
     );
     return rows.map(toEntity);
   }
@@ -42,7 +45,8 @@ export class ContactsRepository {
    */
   async findById(id: string): Promise<Contact | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM contacts WHERE id = '${id}'`,
+      `SELECT ${COLUMNS} FROM contacts WHERE id = ?`,
+      [id],
     );
     return rows[0] && toEntity(rows[0]);
   }
@@ -72,12 +76,18 @@ export class ContactsRepository {
     // `id` es CHAR(36) sin AUTO_INCREMENT, así que el UUID lo generamos
     // nosotros. Tenerlo antes del INSERT es lo que nos deja releer la fila.
     const id = randomUUID();
-    // Sin notas mandamos NULL sin comillas. Si interpoláramos `undefined`
-    // directo, se guardaría el texto 'undefined'.
-    const notes = contact.notes ? `'${contact.notes}'` : 'NULL';
+    // Sin notas mandamos `null`, que mysql2 convierte en NULL.
     await this.pool.query(
       `INSERT INTO contacts (id, owner_id, name, email, phone, notes)
-       VALUES ('${id}', '${ownerId}', '${contact.name}', '${contact.email}', '${contact.phone}', ${notes})`,
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        ownerId,
+        contact.name,
+        contact.email,
+        contact.phone,
+        contact.notes || null,
+      ],
     );
     // Releemos en vez de regresar lo que insertamos porque `created_at` lo
     // pone MySQL (DEFAULT CURRENT_TIMESTAMP); así la entidad trae la fecha
@@ -97,14 +107,22 @@ export class ContactsRepository {
     changes: Partial<Contact>,
   ): Promise<Contact | undefined> {
     // En un PATCH el cliente manda solo lo que cambia, así que el SET se arma
-    // con las llaves que llegaron. Funciona porque los campos del DTO (name,
-    // email, phone, notes) se llaman igual que las columnas, y el
-    // ValidationPipe con `whitelist` ya quitó cualquier otra llave.
-    // Ojo: si `changes` viene vacío, el SET queda vacío y MySQL rechaza la query.
-    const sets = Object.entries(changes)
-      .map(([column, value]) => `${column} = '${String(value)}'`)
-      .join(', ');
-    await this.pool.query(`UPDATE contacts SET ${sets} WHERE id = '${id}'`);
+    // con las llaves que llegaron. Los nombres de columna salen de esta lista
+    // blanca, nunca del body; los valores van como `?`.
+    const sets: string[] = [];
+    const params: (string | null)[] = [];
+    for (const column of EDITABLE) {
+      if (changes[column] === undefined) continue;
+      sets.push(`${column} = ?`);
+      params.push(changes[column] ?? null);
+    }
+    // Sin cambios no hay UPDATE: MySQL rechaza un SET vacío.
+    if (sets.length > 0) {
+      await this.pool.query(
+        `UPDATE contacts SET ${sets.join(', ')} WHERE id = ?`,
+        [...params, id],
+      );
+    }
     return this.findById(id);
   }
 
@@ -116,9 +134,10 @@ export class ContactsRepository {
    * @returns El contacto después del cambio, o `undefined` si no existe.
    */
   async setPhoto(id: string, filename: string): Promise<Contact | undefined> {
-    await this.pool.query(
-      `UPDATE contacts SET photo = '${filename}' WHERE id = '${id}'`,
-    );
+    await this.pool.query('UPDATE contacts SET photo = ? WHERE id = ?', [
+      filename,
+      id,
+    ]);
     return this.findById(id);
   }
 
@@ -130,7 +149,8 @@ export class ContactsRepository {
    */
   async delete(id: string): Promise<boolean> {
     const [result] = await this.pool.query<ResultSetHeader>(
-      `DELETE FROM contacts WHERE id = '${id}'`,
+      'DELETE FROM contacts WHERE id = ?',
+      [id],
     );
     return result.affectedRows > 0;
   }

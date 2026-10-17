@@ -23,7 +23,8 @@ export class UsersRepository {
   async findByEmail(email: string): Promise<User | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
-       WHERE u.correo_electronico = '${email}'`,
+       WHERE u.correo_electronico = ?`,
+      [email],
     );
     return rows[0] && toEntity(rows[0]);
   }
@@ -34,7 +35,7 @@ export class UsersRepository {
    * (RNF07): el DTO de registro ya exigió ese consentimiento.
    *
    * @param user - Datos del usuario; el email debe ser único.
-   * @param passwordHash - Hash SHA-256 en hex del password, no el password.
+   * @param passwordHash - Hash del password (ver `auth/password.ts`), no el password.
    * @returns El usuario guardado, con `id` y `createdAt` asignados.
    */
   async save(
@@ -46,7 +47,8 @@ export class UsersRepository {
     await this.pool.query(
       `INSERT INTO Usuario (id_rol, nombre, apellido, pais, correo_electronico, contrasena_hash, fecha_consentimiento)
        VALUES ((SELECT id_rol FROM Rol WHERE nombre_rol = 'Usuario'),
-               '${user.name}', '${user.lastName}', '${user.country}', '${user.email}', '${passwordHash}', NOW())`,
+               ?, ?, ?, ?, ?, NOW())`,
+      [user.name, user.lastName, user.country, user.email, passwordHash],
     );
     // Releemos para traer el `id_usuario` y `fecha_registro` que asignó MySQL.
     return (await this.findByEmail(user.email!))!;
@@ -61,7 +63,8 @@ export class UsersRepository {
   async findById(id: string): Promise<User | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
-       WHERE u.id_usuario = '${id}'`,
+       WHERE u.id_usuario = ?`,
+      [id],
     );
     return rows[0] && toEntity(rows[0]);
   }
@@ -78,20 +81,28 @@ export class UsersRepository {
     accountStatus?: string;
     q?: string;
   }): Promise<User[]> {
+    // Cada condición lleva sus `?`; los valores van aparte en `params`.
     const where = ['1 = 1'];
-    if (filters.role) where.push(`r.nombre_rol = '${filters.role}'`);
+    const params: string[] = [];
+    if (filters.role) {
+      where.push('r.nombre_rol = ?');
+      params.push(filters.role);
+    }
     if (filters.accountStatus) {
-      where.push(`u.estado_cuenta = '${filters.accountStatus}'`);
+      where.push('u.estado_cuenta = ?');
+      params.push(filters.accountStatus);
     }
     if (filters.q) {
+      const like = `%${filters.q}%`;
       where.push(
-        `(u.nombre LIKE '%${filters.q}%' OR u.apellido LIKE '%${filters.q}%' ` +
-          `OR u.correo_electronico LIKE '%${filters.q}%')`,
+        '(u.nombre LIKE ? OR u.apellido LIKE ? OR u.correo_electronico LIKE ?)',
       );
+      params.push(like, like, like);
     }
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
        WHERE ${where.join(' AND ')} ORDER BY u.fecha_registro`,
+      params,
     );
     return rows.map(toEntity);
   }
@@ -110,25 +121,30 @@ export class UsersRepository {
     >,
   ): Promise<User | undefined> {
     // Los campos del DTO no se llaman como las columnas, así que el SET se
-    // arma con este mapa.
+    // arma con este mapa. Solo sus columnas pueden entrar al SQL; los valores
+    // van como `?`.
     const columns: Record<string, string> = {
       name: 'nombre',
       lastName: 'apellido',
       country: 'pais',
       accountStatus: 'estado_cuenta',
     };
-    const sets = Object.entries(changes)
-      .filter(([field, value]) => columns[field] && value !== undefined)
-      .map(([field, value]) => `${columns[field]} = '${value}'`);
+    const sets: string[] = [];
+    const params: string[] = [];
+    for (const [field, value] of Object.entries(changes)) {
+      if (!columns[field] || value === undefined) continue;
+      sets.push(`${columns[field]} = ?`);
+      params.push(String(value));
+    }
     if (changes.role) {
-      sets.push(
-        `id_rol = (SELECT id_rol FROM Rol WHERE nombre_rol = '${changes.role}')`,
-      );
+      sets.push('id_rol = (SELECT id_rol FROM Rol WHERE nombre_rol = ?)');
+      params.push(changes.role);
     }
     // Sin cambios no hay UPDATE: MySQL rechaza un SET vacío.
     if (sets.length > 0) {
       await this.pool.query(
-        `UPDATE Usuario SET ${sets.join(', ')} WHERE id_usuario = '${id}'`,
+        `UPDATE Usuario SET ${sets.join(', ')} WHERE id_usuario = ?`,
+        [...params, id],
       );
     }
     return this.findById(id);
@@ -138,11 +154,12 @@ export class UsersRepository {
    * Reemplaza el hash del password de un usuario.
    *
    * @param id - `id_usuario`.
-   * @param passwordHash - Hash SHA-256 en hex del password nuevo.
+   * @param passwordHash - Hash del password nuevo (ver `auth/password.ts`).
    */
   async updatePassword(id: string, passwordHash: string): Promise<void> {
     await this.pool.query(
-      `UPDATE Usuario SET contrasena_hash = '${passwordHash}' WHERE id_usuario = '${id}'`,
+      'UPDATE Usuario SET contrasena_hash = ? WHERE id_usuario = ?',
+      [passwordHash, id],
     );
   }
 }

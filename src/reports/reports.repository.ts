@@ -68,7 +68,8 @@ export class ReportsRepository {
    */
   async findById(id: number): Promise<Report | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${COLUMNS} FROM ${FROM} WHERE r.id_reporte = ${id}`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE r.id_reporte = ?`,
+      [id],
     );
     if (!rows[0]) return undefined;
     return (await this.withRelations([toEntity(rows[0])]))[0];
@@ -81,25 +82,42 @@ export class ReportsRepository {
    * @returns Los reportes con sus URLs y evidencias; vacío si no hay.
    */
   async findAll(query: ReportQuery): Promise<Report[]> {
+    // Cada condición lleva sus `?`; los valores van aparte en `params`.
     const where = ['1 = 1'];
-    if (query.ownerId) where.push(`r.id_usuario = '${query.ownerId}'`);
-    if (query.statuses) {
-      where.push(
-        `e.nombre_estado IN (${query.statuses.map((s) => `'${s}'`).join(', ')})`,
-      );
+    const params: unknown[] = [];
+    if (query.ownerId) {
+      where.push('r.id_usuario = ?');
+      params.push(query.ownerId);
     }
-    if (query.status) where.push(`e.nombre_estado = '${query.status}'`);
+    if (query.statuses) {
+      // mysql2 expande un arreglo en `IN (?)` a una lista de valores.
+      where.push('e.nombre_estado IN (?)');
+      params.push(query.statuses);
+    }
+    if (query.status) {
+      where.push('e.nombre_estado = ?');
+      params.push(query.status);
+    }
     if (query.fraudTypeId) {
-      where.push(`r.id_tipo_fraude = ${query.fraudTypeId}`);
+      where.push('r.id_tipo_fraude = ?');
+      params.push(query.fraudTypeId);
     }
     if (query.from) {
-      where.push(`r.fecha_creacion >= '${toMysqlDate(query.from)}'`);
+      where.push('r.fecha_creacion >= ?');
+      params.push(toMysqlDate(query.from));
     }
-    if (query.to) where.push(`r.fecha_creacion <= '${toMysqlDate(query.to)}'`);
-    if (query.q) where.push(`r.descripcion_incidente LIKE '%${query.q}%'`);
+    if (query.to) {
+      where.push('r.fecha_creacion <= ?');
+      params.push(toMysqlDate(query.to));
+    }
+    if (query.q) {
+      where.push('r.descripcion_incidente LIKE ?');
+      params.push(`%${query.q}%`);
+    }
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM ${FROM} WHERE ${where.join(' AND ')}
        ORDER BY r.fecha_creacion DESC, r.id_reporte DESC`,
+      params,
     );
     return this.withRelations(rows.map(toEntity));
   }
@@ -117,7 +135,8 @@ export class ReportsRepository {
        FROM Historial_Estado h
        LEFT JOIN Estado ea ON ea.id_estado = h.id_estado_anterior
        JOIN Estado en ON en.id_estado = h.id_estado_nuevo
-       WHERE h.id_reporte = ${id} ORDER BY h.fecha_cambio, h.id_historial`,
+       WHERE h.id_reporte = ? ORDER BY h.fecha_cambio, h.id_historial`,
+      [id],
     );
     return rows.map((row) => {
       const entry = new ReportHistoryEntry();
@@ -139,7 +158,8 @@ export class ReportsRepository {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT s.url_texto, s.nivel_riesgo_global, s.estado_certificado, s.fecha_ultima_evaluacion
        FROM Reporte_URL ru JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE ru.id_reporte = ${id} ORDER BY ru.fecha_asociacion, s.id_url`,
+       WHERE ru.id_reporte = ? ORDER BY ru.fecha_asociacion, s.id_url`,
+      [id],
     );
     return rows.map((row) => ({
       url: row.url_texto,
@@ -158,7 +178,8 @@ export class ReportsRepository {
   async findEvidenceDetails(id: number): Promise<ReportEvidenceDetail[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ruta_archivo, tipo_archivo, fecha_carga FROM Evidencia
-       WHERE id_reporte = ${id} ORDER BY fecha_carga, id_evidencia`,
+       WHERE id_reporte = ? ORDER BY fecha_carga, id_evidencia`,
+      [id],
     );
     return rows.map((row) => ({
       fileName: row.ruta_archivo,
@@ -174,7 +195,8 @@ export class ReportsRepository {
    */
   async isFinalStatus(status: string): Promise<boolean> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT es_final FROM Estado WHERE nombre_estado = '${status}'`,
+      'SELECT es_final FROM Estado WHERE nombre_estado = ?',
+      [status],
     );
     return Boolean(rows[0]?.es_final);
   }
@@ -201,17 +223,22 @@ export class ReportsRepository {
       // `id_reporte` es AUTO_INCREMENT: MySQL lo regresa en `insertId`.
       const [result] = await conn.query<ResultSetHeader>(
         `INSERT INTO Reporte (id_usuario, id_tipo_fraude, id_estado, descripcion_incidente, fecha_incidente)
-         VALUES ('${ownerId}', ${report.fraudTypeId},
-                 (SELECT id_estado FROM Estado WHERE nombre_estado = 'RECIBIDO'),
-                 '${report.description}', '${toMysqlDate(report.incidentDate!)}')`,
+         VALUES (?, ?, (SELECT id_estado FROM Estado WHERE nombre_estado = 'RECIBIDO'), ?, ?)`,
+        [
+          ownerId,
+          report.fraudTypeId,
+          report.description,
+          toMysqlDate(report.incidentDate!),
+        ],
       );
       await linkUrls(conn, result.insertId, report.urls!);
       // CU16: cada Administrador y Owner recibe el nuevo ticket en su bandeja.
       await conn.query(
         `INSERT INTO Notificacion_Alerta (id_usuario, id_reporte, mensaje)
-         SELECT u.id_usuario, ${result.insertId}, 'Nuevo reporte #${result.insertId} por revisar'
+         SELECT u.id_usuario, ?, ?
          FROM Usuario u JOIN Rol ro ON ro.id_rol = u.id_rol
          WHERE ro.nombre_rol IN ('Administrador', 'Owner') AND u.estado_cuenta = 'ACTIVO'`,
+        [result.insertId, `Nuevo reporte #${result.insertId} por revisar`],
       );
       return result.insertId;
     });
@@ -232,25 +259,31 @@ export class ReportsRepository {
       Pick<Report, 'fraudTypeId' | 'description' | 'incidentDate' | 'urls'>
     >,
   ): Promise<Report | undefined> {
+    // Columnas fijas en el código; los valores van como `?`.
     const sets: string[] = [];
+    const params: unknown[] = [];
     if (changes.fraudTypeId !== undefined) {
-      sets.push(`id_tipo_fraude = ${changes.fraudTypeId}`);
+      sets.push('id_tipo_fraude = ?');
+      params.push(changes.fraudTypeId);
     }
     if (changes.description !== undefined) {
-      sets.push(`descripcion_incidente = '${changes.description}'`);
+      sets.push('descripcion_incidente = ?');
+      params.push(changes.description);
     }
     if (changes.incidentDate !== undefined) {
-      sets.push(`fecha_incidente = '${toMysqlDate(changes.incidentDate)}'`);
+      sets.push('fecha_incidente = ?');
+      params.push(toMysqlDate(changes.incidentDate));
     }
     await this.transaction(async (conn) => {
       // Sin campos no hay UPDATE: MySQL rechaza un SET vacío.
       if (sets.length > 0) {
         await conn.query(
-          `UPDATE Reporte SET ${sets.join(', ')} WHERE id_reporte = ${id}`,
+          `UPDATE Reporte SET ${sets.join(', ')} WHERE id_reporte = ?`,
+          [...params, id],
         );
       }
       if (changes.urls) {
-        await conn.query(`DELETE FROM Reporte_URL WHERE id_reporte = ${id}`);
+        await conn.query('DELETE FROM Reporte_URL WHERE id_reporte = ?', [id]);
         await linkUrls(conn, id, changes.urls);
       }
     });
@@ -275,7 +308,7 @@ export class ReportsRepository {
         'Reporte_URL',
         'Reporte',
       ]) {
-        await conn.query(`DELETE FROM ${table} WHERE id_reporte = ${id}`);
+        await conn.query(`DELETE FROM ${table} WHERE id_reporte = ?`, [id]);
       }
     });
     return report?.evidence ?? [];
@@ -301,18 +334,19 @@ export class ReportsRepository {
     status: string,
     observations: string | undefined,
   ): Promise<Report> {
-    const obs = observations ? `'${observations}'` : 'NULL';
     await this.transaction(async (conn) => {
       // El historial se inserta antes del UPDATE para leer el estado anterior.
       await conn.query(
         `INSERT INTO Historial_Estado (id_reporte, id_admin_responsable, id_estado_anterior, id_estado_nuevo, observaciones)
-         SELECT id_reporte, '${adminId}', id_estado,
-                (SELECT id_estado FROM Estado WHERE nombre_estado = '${status}'), ${obs}
-         FROM Reporte WHERE id_reporte = ${id}`,
+         SELECT id_reporte, ?, id_estado,
+                (SELECT id_estado FROM Estado WHERE nombre_estado = ?), ?
+         FROM Reporte WHERE id_reporte = ?`,
+        [adminId, status, observations || null, id],
       );
       await conn.query(
-        `UPDATE Reporte SET id_estado = (SELECT id_estado FROM Estado WHERE nombre_estado = '${status}')
-         WHERE id_reporte = ${id}`,
+        `UPDATE Reporte SET id_estado = (SELECT id_estado FROM Estado WHERE nombre_estado = ?)
+         WHERE id_reporte = ?`,
+        [status, id],
       );
       // RF06: el denunciante se entera del cambio.
       const message =
@@ -320,7 +354,8 @@ export class ReportsRepository {
         (observations ? `: ${observations}` : '');
       await conn.query(
         `INSERT INTO Notificacion_Alerta (id_usuario, id_reporte, mensaje)
-         SELECT id_usuario, id_reporte, '${message}' FROM Reporte WHERE id_reporte = ${id}`,
+         SELECT id_usuario, id_reporte, ? FROM Reporte WHERE id_reporte = ?`,
+        [message, id],
       );
     });
     return (await this.findById(id))!;
@@ -342,14 +377,16 @@ export class ReportsRepository {
   ): Promise<Report> {
     await this.transaction(async (conn) => {
       await conn.query(
-        `UPDATE Reporte SET nivel_riesgo_asignado = '${riskLevel}' WHERE id_reporte = ${id}`,
+        'UPDATE Reporte SET nivel_riesgo_asignado = ? WHERE id_reporte = ?',
+        [riskLevel, id],
       );
       // Log de auditoría: mismo estado antes y después, el cambio va en
       // observaciones.
       await conn.query(
         `INSERT INTO Historial_Estado (id_reporte, id_admin_responsable, id_estado_anterior, id_estado_nuevo, observaciones)
-         SELECT id_reporte, '${adminId}', id_estado, id_estado, 'Nivel de riesgo: ${riskLevel}'
-         FROM Reporte WHERE id_reporte = ${id}`,
+         SELECT id_reporte, ?, id_estado, id_estado, ?
+         FROM Reporte WHERE id_reporte = ?`,
+        [adminId, `Nivel de riesgo: ${riskLevel}`, id],
       );
     });
     return (await this.findById(id))!;
@@ -370,7 +407,8 @@ export class ReportsRepository {
   ): Promise<Report | undefined> {
     await this.pool.query(
       `INSERT INTO Evidencia (id_reporte, ruta_archivo, tipo_archivo)
-       VALUES (${id}, '${filename}', '${mimeType}')`,
+       VALUES (?, ?, ?)`,
+      [id, filename, mimeType],
     );
     return this.findById(id);
   }
@@ -381,15 +419,18 @@ export class ReportsRepository {
    */
   private async withRelations(reports: Report[]): Promise<Report[]> {
     if (reports.length === 0) return reports;
-    const ids = reports.map((r) => r.id).join(', ');
+    // mysql2 expande el arreglo en `IN (?)` a una lista de valores.
+    const ids = reports.map((r) => r.id);
     const [urls] = await this.pool.query<RowDataPacket[]>(
       `SELECT ru.id_reporte, s.url_texto FROM Reporte_URL ru
        JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE ru.id_reporte IN (${ids}) ORDER BY ru.fecha_asociacion, s.id_url`,
+       WHERE ru.id_reporte IN (?) ORDER BY ru.fecha_asociacion, s.id_url`,
+      [ids],
     );
     const [evidence] = await this.pool.query<RowDataPacket[]>(
       `SELECT id_reporte, ruta_archivo FROM Evidencia
-       WHERE id_reporte IN (${ids}) ORDER BY fecha_carga, id_evidencia`,
+       WHERE id_reporte IN (?) ORDER BY fecha_carga, id_evidencia`,
+      [ids],
     );
     for (const report of reports) {
       report.urls = urls
@@ -437,11 +478,13 @@ async function linkUrls(
     // Cada URL existe una sola vez en SitioWeb_URL. Si ya estaba,
     // LAST_INSERT_ID(id_url) hace que `insertId` traiga el id existente.
     const [site] = await conn.query<ResultSetHeader>(
-      `INSERT INTO SitioWeb_URL (url_texto) VALUES ('${url}')
+      `INSERT INTO SitioWeb_URL (url_texto) VALUES (?)
        ON DUPLICATE KEY UPDATE id_url = LAST_INSERT_ID(id_url)`,
+      [url],
     );
     await conn.query(
-      `INSERT INTO Reporte_URL (id_reporte, id_url) VALUES (${id}, ${site.insertId})`,
+      'INSERT INTO Reporte_URL (id_reporte, id_url) VALUES (?, ?)',
+      [id, site.insertId],
     );
   }
 }

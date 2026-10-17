@@ -41,8 +41,9 @@ export class RiskRepository {
   async findSites(q: string): Promise<RiskSiteDto[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion
-       FROM SitioWeb_URL WHERE url_texto LIKE '%${q}%'
+       FROM SitioWeb_URL WHERE url_texto LIKE ?
        ORDER BY FIELD(nivel_riesgo_global, 'BAJO', 'MEDIO', 'ALTO', 'MUY_ALTO') DESC`,
+      [likeContains(q)],
     );
     return rows.map((row) => ({
       url: row.url_texto,
@@ -69,8 +70,9 @@ export class RiskRepository {
        JOIN TipoFraude t ON t.id_tipo_fraude = r.id_tipo_fraude
        JOIN Reporte_URL ru ON ru.id_reporte = r.id_reporte
        JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE s.url_texto LIKE '%${q}%' AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
+       WHERE s.url_texto LIKE ? AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
        ORDER BY r.fecha_incidente DESC`,
+      [likeContains(q)],
     );
     return rows.map((row) => ({
       fraudType: row.nombre_tipo,
@@ -97,8 +99,9 @@ export class RiskRepository {
        JOIN TipoFraude t ON t.id_tipo_fraude = r.id_tipo_fraude
        JOIN Reporte_URL ru ON ru.id_reporte = r.id_reporte
        JOIN SitioWeb_URL s ON s.id_url = ru.id_url
-       WHERE s.url_texto LIKE '%${hostname}%' AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
+       WHERE s.url_texto LIKE ? AND e.nombre_estado IN ('VALIDADO', 'CANALIZADO')
        ORDER BY r.fecha_incidente DESC`,
+      [likeContains(hostname)],
     );
     // El LIKE también trae `banco.com.malo.net` o `mibanco.com`: el host se
     // compara completo aquí. Un reporte con dos URLs del sitio llega dos
@@ -130,8 +133,9 @@ export class RiskRepository {
   ): Promise<StoredEvaluation | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${EVALUATION_COLUMNS} FROM SitioWeb_URL
-       WHERE url_texto = '${url}' AND detalle_evaluacion IS NOT NULL
-         AND fecha_ultima_evaluacion >= NOW() - INTERVAL ${maxAgeHours} HOUR`,
+       WHERE url_texto = ? AND detalle_evaluacion IS NOT NULL
+         AND fecha_ultima_evaluacion >= NOW() - INTERVAL ? HOUR`,
+      [url, maxAgeHours],
     );
     return rows[0] && toStored(rows[0]);
   }
@@ -146,7 +150,8 @@ export class RiskRepository {
    */
   async findRiskLevel(url: string): Promise<string | undefined> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT nivel_riesgo_global FROM SitioWeb_URL WHERE url_texto = '${url}'`,
+      'SELECT nivel_riesgo_global FROM SitioWeb_URL WHERE url_texto = ?',
+      [url],
     );
     return rows[0]?.nivel_riesgo_global as string | undefined;
   }
@@ -159,7 +164,8 @@ export class RiskRepository {
   async findEvaluationsByHost(hostname: string): Promise<StoredEvaluation[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${EVALUATION_COLUMNS} FROM SitioWeb_URL
-       WHERE url_texto LIKE '%${hostname}%'`,
+       WHERE url_texto LIKE ?`,
+      [likeContains(hostname)],
     );
     // Mismo motivo que en `findValidatedReportsByHost`: el host exacto se
     // compara aquí.
@@ -183,12 +189,18 @@ export class RiskRepository {
   ): Promise<void> {
     await this.pool.query(
       `INSERT INTO SitioWeb_URL (url_texto, nivel_riesgo_global, estado_certificado, fecha_ultima_evaluacion, detalle_evaluacion)
-       VALUES ('${url}', '${evaluation.riskLevel}', '${certificateStatus}', NOW(), ${jsonLiteral(evaluation)})
+       VALUES (?, ?, ?, NOW(), ?)
        ON DUPLICATE KEY UPDATE
          nivel_riesgo_global = VALUES(nivel_riesgo_global),
          estado_certificado = VALUES(estado_certificado),
          fecha_ultima_evaluacion = VALUES(fecha_ultima_evaluacion),
          detalle_evaluacion = VALUES(detalle_evaluacion)`,
+      [
+        url,
+        evaluation.riskLevel,
+        certificateStatus,
+        JSON.stringify(evaluation),
+      ],
     );
   }
 
@@ -203,9 +215,10 @@ export class RiskRepository {
   async saveRisk(url: string, evaluation: Evaluation): Promise<void> {
     await this.pool.query(
       `UPDATE SitioWeb_URL SET
-         nivel_riesgo_global = '${evaluation.riskLevel}',
-         detalle_evaluacion = ${jsonLiteral(evaluation)}
-       WHERE url_texto = '${url}'`,
+         nivel_riesgo_global = ?,
+         detalle_evaluacion = ?
+       WHERE url_texto = ?`,
+      [evaluation.riskLevel, JSON.stringify(evaluation), url],
     );
   }
 
@@ -219,8 +232,9 @@ export class RiskRepository {
   async recordLookup(userId: string, url: string): Promise<void> {
     await this.pool.query(
       `INSERT INTO Consulta_URL (id_usuario, id_url)
-       SELECT '${userId}', id_url FROM SitioWeb_URL WHERE url_texto = '${url}'
+       SELECT ?, id_url FROM SitioWeb_URL WHERE url_texto = ?
        ON DUPLICATE KEY UPDATE fecha_consulta = NOW()`,
+      [userId, url],
     );
   }
 
@@ -240,39 +254,37 @@ export class RiskRepository {
     days: number,
     exceptUserId?: string,
   ): Promise<void> {
-    const except = exceptUserId ? `AND d.id_usuario <> '${exceptUserId}'` : '';
+    // Sin usuario a excluir, `d.id_usuario <> NULL` nunca es verdadero, así
+    // que el IS NULL deja pasar a todos.
+    const except = exceptUserId ?? null;
     // UNION (sin ALL) deja una sola fila por usuario aunque haya consultado
     // y además reportado la URL: recibe una alerta, no dos.
     await this.pool.query(
       `INSERT INTO Notificacion_Alerta (id_usuario, id_url, mensaje)
-       SELECT d.id_usuario, s.id_url, '${message}'
+       SELECT d.id_usuario, s.id_url, ?
        FROM SitioWeb_URL s
        JOIN (
          SELECT c.id_usuario, c.id_url FROM Consulta_URL c
-         WHERE c.fecha_consulta >= NOW() - INTERVAL ${days} DAY
+         WHERE c.fecha_consulta >= NOW() - INTERVAL ? DAY
          UNION
          SELECT r.id_usuario, ru.id_url FROM Reporte_URL ru
          JOIN Reporte r ON r.id_reporte = ru.id_reporte
-         WHERE r.fecha_creacion >= NOW() - INTERVAL ${days} DAY
+         WHERE r.fecha_creacion >= NOW() - INTERVAL ? DAY
        ) d ON d.id_url = s.id_url
        JOIN Usuario u ON u.id_usuario = d.id_usuario
-       WHERE s.url_texto = '${url}' AND u.estado_cuenta = 'ACTIVO' ${except}`,
+       WHERE s.url_texto = ? AND u.estado_cuenta = 'ACTIVO'
+         AND (? IS NULL OR d.id_usuario <> ?)`,
+      [message, days, days, url, except, except],
     );
   }
 }
 
 /**
- * Expresión SQL con un objeto como JSON, para una columna de tipo JSON.
- *
- * El JSON lleva comillas dobles y diagonales invertidas, y los textos de las
- * verificaciones pueden traer apóstrofos ("Let's Encrypt"): pegado tal cual
- * en la consulta la rompería. Va en base64, que solo usa letras, números y
- * `+/=`, y MySQL lo decodifica.
+ * Patrón LIKE de "contiene", con `%` y `_` del texto escapados para que se
+ * busquen tal cual y no funcionen como comodines.
  */
-function jsonLiteral(value: object): string {
-  const base64 = Buffer.from(JSON.stringify(value)).toString('base64');
-  // FROM_BASE64 regresa bytes sin charset; una columna JSON exige utf8mb4.
-  return `CONVERT(FROM_BASE64('${base64}') USING utf8mb4)`;
+function likeContains(text: string): string {
+  return `%${text.replace(/[\\%_]/g, '\\$&')}%`;
 }
 
 /**

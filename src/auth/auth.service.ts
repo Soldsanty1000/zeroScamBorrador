@@ -5,12 +5,12 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { sign, verify } from './jwt';
+import { hashPassword, needsRehash, verifyPassword } from './password';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { VerifyCodeDto } from './dto/verify-code.dto';
 import { TwoFactorChallenge, TwoFactorService } from './two-factor.service';
@@ -54,7 +54,7 @@ export class AuthService {
         lastName: dto.lastName,
         country: dto.country,
       },
-      hash(dto.password!),
+      await hashPassword(dto.password!),
     );
     return {
       id: user.id!,
@@ -84,9 +84,17 @@ export class AuthService {
       throw new UnauthorizedException('El usuario no existe');
     }
     // No guardamos el password, solo su hash. Para comprobarlo hasheamos lo
-    // que llegó y comparamos contra lo guardado.
-    if (user.passwordHash !== hash(dto.password!)) {
+    // que llegó con la misma sal y comparamos contra lo guardado.
+    if (!(await verifyPassword(dto.password!, user.passwordHash))) {
       throw new UnauthorizedException('Password incorrecto');
+    }
+    // Cuentas de antes del cambio a scrypt: con el password en la mano se
+    // reemplaza su hash SHA-256 por uno nuevo.
+    if (needsRehash(user.passwordHash)) {
+      await this.users.updatePassword(
+        user.id!,
+        await hashPassword(dto.password!),
+      );
     }
     // Un administrador puede desactivar cuentas (RF03): esas ya no entran.
     if (user.accountStatus !== 'ACTIVO') {
@@ -180,7 +188,7 @@ export class AuthService {
     // Pedir el password actual evita que alguien con un token ajeno (o con
     // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
     // no un 401: el token es válido, lo que está mal es el dato.
-    if (user.passwordHash !== hash(dto.currentPassword!)) {
+    if (!(await verifyPassword(dto.currentPassword!, user.passwordHash))) {
       throw new BadRequestException('El password actual es incorrecto');
     }
     if (dto.newPassword === dto.currentPassword) {
@@ -188,17 +196,9 @@ export class AuthService {
         'El password nuevo debe ser distinto al actual',
       );
     }
-    await this.users.updatePassword(userId, hash(dto.newPassword!));
+    await this.users.updatePassword(
+      userId,
+      await hashPassword(dto.newPassword!),
+    );
   }
-}
-
-/**
- * Hashea un password con SHA-256.
- *
- * @param password - Password en texto plano.
- * @returns El hash en hexadecimal: 64 caracteres; cabe en la columna
- * `contrasena_hash` (VARCHAR(255)).
- */
-function hash(password: string): string {
-  return createHash('sha256').update(password).digest('hex');
 }

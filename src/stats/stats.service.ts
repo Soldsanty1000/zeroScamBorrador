@@ -7,6 +7,7 @@ import { StatsQueryDto } from './dto/stats-query.dto';
 import { StatsResponseDto } from './dto/stats-response.dto';
 import {
   DateRange,
+  and,
   rangeClause,
   StatsFilters,
   StatsRepository,
@@ -113,11 +114,10 @@ export class StatsService {
         'fecha_ultima_evaluacion',
         {},
       ),
-      this.repository.count(
-        'SitioWeb_URL',
-        'COUNT(*)',
-        'fecha_ultima_evaluacion IS NOT NULL',
-      ),
+      this.repository.count('SitioWeb_URL', 'COUNT(*)', {
+        sql: 'fecha_ultima_evaluacion IS NOT NULL',
+        params: [],
+      }),
       this.repository.count('Consulta_URL', 'COUNT(*)', lookedUp),
       this.repository.count(
         'Consulta_URL',
@@ -134,12 +134,12 @@ export class StatsService {
       this.repository.count(
         'Notificacion_Alerta',
         'COUNT(*)',
-        sent + ' AND leido_estatus = FALSE',
+        and(sent, 'leido_estatus = FALSE'),
       ),
       this.repository.count(
         'Notificacion_Alerta',
         'COUNT(*)',
-        sent + ' AND id_url IS NOT NULL',
+        and(sent, 'id_url IS NOT NULL'),
       ),
     ]);
     const total = (counts: { count: number }[]) =>

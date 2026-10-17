@@ -17,6 +17,15 @@ export interface StatsFilters {
   riskLevel?: string;
 }
 
+/**
+ * Condición SQL con sus valores aparte: `sql` lleva `?` y `params` los
+ * valores en el mismo orden, para que ningún dato entre pegado al SQL.
+ */
+export interface Condition {
+  sql: string;
+  params: unknown[];
+}
+
 /** Periodo de las métricas de la plataforma; los ausentes no filtran. */
 export interface DateRange {
   from?: Date;
@@ -40,9 +49,12 @@ export class StatsRepository {
    * @returns Un `{ name, count }` por grupo, de mayor a menor.
    */
   async countBy(groupBy: string, filters: StatsFilters): Promise<CountDto[]> {
+    // `groupBy` es una expresión fija del service, no un dato del usuario.
+    const where = whereClause(filters);
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${groupBy} AS name, COUNT(*) AS count FROM ${FROM}
-       WHERE ${whereClause(filters)} GROUP BY name ORDER BY count DESC, name`,
+       WHERE ${where.sql} GROUP BY name ORDER BY count DESC, name`,
+      where.params,
     );
     // COUNT(*) llega como número; `name` puede ser número (p. ej. meses).
     return rows.map((row) => ({
@@ -66,9 +78,11 @@ export class StatsRepository {
     dateColumn: string,
     range: DateRange,
   ): Promise<CountDto[]> {
+    const where = rangeClause(dateColumn, range);
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${groupBy} AS name, COUNT(*) AS count FROM ${from}
-       WHERE ${rangeClause(dateColumn, range)} GROUP BY name ORDER BY count DESC, name`,
+       WHERE ${where.sql} GROUP BY name ORDER BY count DESC, name`,
+      where.params,
     );
     return rows.map((row) => ({
       name: String(row.name),
@@ -82,15 +96,16 @@ export class StatsRepository {
    * @param from - Tabla.
    * @param expression - Qué contar, p. ej. `COUNT(*)` o
    * `COUNT(DISTINCT id_usuario)`.
-   * @param where - Condición; `1 = 1` para contar todo.
+   * @param where - Condición con sus valores; ver {@link Condition}.
    */
   async count(
     from: string,
     expression: string,
-    where: string,
+    where: Condition,
   ): Promise<number> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      `SELECT ${expression} AS count FROM ${from} WHERE ${where}`,
+      `SELECT ${expression} AS count FROM ${from} WHERE ${where.sql}`,
+      where.params,
     );
     return Number(rows[0].count);
   }
@@ -99,36 +114,52 @@ export class StatsRepository {
 /**
  * Condición SQL que limita una columna de fecha a un periodo.
  *
+ * @param column - Columna fija del código, nunca un dato del usuario.
  * @returns `1 = 1` si el periodo no trae fechas.
  */
-export function rangeClause(column: string, range: DateRange): string {
+export function rangeClause(column: string, range: DateRange): Condition {
   const where = ['1 = 1'];
+  const params: unknown[] = [];
   if (range.from) {
-    where.push(`${column} >= '${range.from.toLocaleString('sv-SE')}'`);
+    where.push(`${column} >= ?`);
+    params.push(range.from.toLocaleString('sv-SE'));
   }
   if (range.to) {
-    where.push(`${column} <= '${range.to.toLocaleString('sv-SE')}'`);
+    where.push(`${column} <= ?`);
+    params.push(range.to.toLocaleString('sv-SE'));
   }
-  return where.join(' AND ');
+  return { sql: where.join(' AND '), params };
+}
+
+/** Agrega una condición fija (sin valores) a otra. */
+export function and(condition: Condition, sql: string): Condition {
+  return { sql: `${condition.sql} AND ${sql}`, params: condition.params };
 }
 
 /** Arma el WHERE con los filtros presentes. */
-function whereClause(filters: StatsFilters): string {
+function whereClause(filters: StatsFilters): Condition {
   const where = ['1 = 1'];
+  const params: unknown[] = [];
   if (filters.statuses) {
-    where.push(
-      `e.nombre_estado IN (${filters.statuses.map((s) => `'${s}'`).join(', ')})`,
-    );
+    // mysql2 expande el arreglo en `IN (?)` a una lista de valores.
+    where.push('e.nombre_estado IN (?)');
+    params.push(filters.statuses);
   }
   if (filters.from) {
-    where.push(`r.fecha_creacion >= '${filters.from.toLocaleString('sv-SE')}'`);
+    where.push('r.fecha_creacion >= ?');
+    params.push(filters.from.toLocaleString('sv-SE'));
   }
   if (filters.to) {
-    where.push(`r.fecha_creacion <= '${filters.to.toLocaleString('sv-SE')}'`);
+    where.push('r.fecha_creacion <= ?');
+    params.push(filters.to.toLocaleString('sv-SE'));
   }
-  if (filters.country) where.push(`u.pais = '${filters.country}'`);
+  if (filters.country) {
+    where.push('u.pais = ?');
+    params.push(filters.country);
+  }
   if (filters.riskLevel) {
-    where.push(`r.nivel_riesgo_asignado = '${filters.riskLevel}'`);
+    where.push('r.nivel_riesgo_asignado = ?');
+    params.push(filters.riskLevel);
   }
-  return where.join(' AND ');
+  return { sql: where.join(' AND '), params };
 }

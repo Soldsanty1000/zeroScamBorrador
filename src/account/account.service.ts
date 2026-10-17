@@ -5,7 +5,6 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { AuthService } from '../auth/auth.service';
 import { TwoFactorService } from '../auth/two-factor.service';
@@ -28,6 +27,7 @@ import {
   UpdateAccountDto,
   UpdatePreferencesDto,
 } from './dto/account.dto';
+import { verifyPassword } from '../auth/password';
 
 const DEFAULT_PRIVACY_VERSION = '2026-10';
 
@@ -205,9 +205,13 @@ export class AccountService {
     if (!password) {
       throw new BadRequestException('Confirma tu contraseña para continuar.');
     }
-    // Mismo hash que AuthService: es el que está guardado en `contrasena_hash`.
-    const hash = createHash('sha256').update(password).digest('hex');
-    if (hash !== (await this.repository.passwordHash(me.id))) {
+    // Misma verificación que AuthService contra `contrasena_hash`.
+    if (
+      !(await verifyPassword(
+        password,
+        await this.repository.passwordHash(me.id),
+      ))
+    ) {
       throw new BadRequestException('La contraseña no es correcta.');
     }
   }
