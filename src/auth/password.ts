@@ -23,6 +23,13 @@ const SALT_BYTES = 16;
 const KEY_BYTES = 64;
 
 /**
+ * Hash con el formato real pero que no corresponde a ningún password. El
+ * login lo verifica cuando el correo no existe, para tardar lo mismo que con
+ * uno que sí.
+ */
+export const DUMMY_HASH = `${PREFIX}:${'0'.repeat(SALT_BYTES * 2)}:${'0'.repeat(KEY_BYTES * 2)}`;
+
+/**
  * Hashea un password con scrypt y una sal aleatoria.
  *
  * scrypt es lento a propósito y la sal hace que dos passwords iguales den

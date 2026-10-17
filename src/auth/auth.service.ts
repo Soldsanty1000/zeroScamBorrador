@@ -10,7 +10,12 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
 import { sign, verify } from './jwt';
-import { hashPassword, needsRehash, verifyPassword } from './password';
+import {
+  DUMMY_HASH,
+  hashPassword,
+  needsRehash,
+  verifyPassword,
+} from './password';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { VerifyCodeDto } from './dto/verify-code.dto';
 import { TwoFactorChallenge, TwoFactorService } from './two-factor.service';
@@ -80,13 +85,18 @@ export class AuthService {
     { accessToken: string; refreshToken: string } | TwoFactorChallenge
   > {
     const user = await this.users.findByEmail(dto.email!);
-    if (!user) {
-      throw new UnauthorizedException('El usuario no existe');
-    }
     // No guardamos el password, solo su hash. Para comprobarlo hasheamos lo
-    // que llegó con la misma sal y comparamos contra lo guardado.
-    if (!(await verifyPassword(dto.password!, user.passwordHash))) {
-      throw new UnauthorizedException('Password incorrecto');
+    // que llegó con la misma sal y comparamos contra lo guardado. Si el
+    // correo no existe se hashea igual contra un hash de relleno: así el
+    // tiempo de respuesta tampoco delata qué correos tienen cuenta.
+    const ok = await verifyPassword(
+      dto.password!,
+      user?.passwordHash ?? DUMMY_HASH,
+    );
+    // Un solo mensaje para correo inexistente y password incorrecto: con dos,
+    // cualquiera podría averiguar qué correos están registrados.
+    if (!user || !ok) {
+      throw new UnauthorizedException('Correo o contraseña incorrectos');
     }
     // Cuentas de antes del cambio a scrypt: con el password en la mano se
     // reemplaza su hash SHA-256 por uno nuevo.
@@ -112,7 +122,6 @@ export class AuthService {
     const claims = { sub: user.id!, email: user.email!, role: user.role! };
     const accessToken = sign({ ...claims, type: 'access' }, ACCESS_TTL);
     const refreshToken = sign({ ...claims, type: 'refresh' }, REFRESH_TTL);
-    console.log('Login de ' + user.email + ': ' + accessToken);
     await this.analytics.count('inicio_sesion', user.id!);
     return { accessToken, refreshToken };
   }

@@ -1,4 +1,8 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { createTransport, type Transporter } from 'nodemailer';
 
@@ -10,11 +14,12 @@ const DEFAULT_FROM = '0Fraude <no-responder@zeroscam.local>';
  * El servidor de correo se configura con `SMTP_URL` (por ejemplo
  * `smtp://localhost:1025` para Mailpit en esta misma máquina). No sale a
  * internet: entrega a un servidor de la propia red. Sin `SMTP_URL` no hay a
- * dónde mandar y el código se escribe en la consola del servidor, que es lo
- * que se hacía antes.
+ * dónde mandar y, solo en desarrollo, el código se escribe en la consola del
+ * servidor.
  */
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
   private transport: Transporter | undefined;
 
   /**
@@ -30,7 +35,18 @@ export class MailService {
   async sendCode(to: string, code: string, minutes: number): Promise<void> {
     const transport = this.getTransport();
     if (!transport) {
-      console.log('Código de verificación para ' + to + ': ' + code);
+      // Sin servidor de correo, el código solo se muestra en desarrollo para
+      // poder probar. En producción un código en los logs dejaría entrar a
+      // quien los lea, así que se avisa sin él.
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error(
+          'Falta SMTP_URL: no se pudo enviar un código de verificación',
+        );
+        throw new ServiceUnavailableException(
+          'No se pudo enviar el código de verificación. Intenta más tarde.',
+        );
+      }
+      this.logger.warn(`[desarrollo] Código de verificación: ${code}`);
       return;
     }
     try {
@@ -50,7 +66,7 @@ export class MailService {
       });
     } catch (err) {
       // Ni el código ni el destinatario van al log: solo por qué falló.
-      console.error(
+      this.logger.error(
         'No se pudo enviar el correo de verificación: ' +
           (err instanceof Error ? err.message : String(err)),
       );

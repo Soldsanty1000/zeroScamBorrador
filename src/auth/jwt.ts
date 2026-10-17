@@ -6,10 +6,36 @@
  * firma con la misma llave. Quien no tenga la llave no puede firmar.
  */
 import { Buffer } from 'node:buffer';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
 
-// Llave con la que firmamos los tokens.
-const SECRET = 'agenda-secret-2026';
+/** Largo mínimo de la llave: con menos, adivinarla por fuerza bruta es viable. */
+const MIN_SECRET_LENGTH = 32;
+
+let secret: string | undefined;
+
+/**
+ * Llave con la que se firman los tokens, tomada de `JWT_SECRET`.
+ *
+ * Nunca vive en el código: quien leyera el repo podría firmar tokens de
+ * cualquier usuario. Sin ella el servidor no arranca (`main.ts` la pide al
+ * iniciar), en vez de firmar con una llave por defecto.
+ *
+ * @throws `Error` si falta `JWT_SECRET` o es demasiado corta.
+ */
+export function jwtSecret(): string {
+  if (secret) return secret;
+  if (!process.env.JWT_SECRET && existsSync('.env')) process.loadEnvFile();
+  const value = process.env.JWT_SECRET;
+  if (!value || value.length < MIN_SECRET_LENGTH) {
+    throw new Error(
+      `Falta JWT_SECRET (mínimo ${MIN_SECRET_LENGTH} caracteres): ` +
+        'genera una con `openssl rand -base64 48` y ponla en .env',
+    );
+  }
+  secret = value;
+  return secret;
+}
 
 /** Lo que viaja dentro del token. `sub` es el id del usuario. */
 export interface JwtPayload {
@@ -34,7 +60,7 @@ function b64url(json: object): string {
 }
 
 function hmac(data: string): string {
-  return createHmac('sha256', SECRET).update(data).digest('base64url');
+  return createHmac('sha256', jwtSecret()).update(data).digest('base64url');
 }
 
 /**
@@ -64,13 +90,25 @@ export function verify(token: string): JwtPayload | null {
   if (!header || !body || !signature) {
     return null;
   }
-  if (hmac(`${header}.${body}`) !== signature) {
+  // Comparación en tiempo constante: con `!==` el tiempo de respuesta revela
+  // cuántos caracteres de la firma acertó quien la está adivinando.
+  const expected = Buffer.from(hmac(`${header}.${body}`));
+  const received = Buffer.from(signature);
+  if (
+    expected.length !== received.length ||
+    !timingSafeEqual(expected, received)
+  ) {
     return null;
   }
-  const payload = JSON.parse(
-    Buffer.from(body, 'base64url').toString(),
-  ) as JwtPayload;
-  if (payload.exp < now()) {
+  let payload: JwtPayload;
+  try {
+    payload = JSON.parse(
+      Buffer.from(body, 'base64url').toString(),
+    ) as JwtPayload;
+  } catch {
+    return null;
+  }
+  if (typeof payload.exp !== 'number' || payload.exp < now()) {
     return null;
   }
   return payload;

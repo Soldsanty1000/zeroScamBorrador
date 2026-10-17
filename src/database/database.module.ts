@@ -1,4 +1,4 @@
-import { Module, OnModuleDestroy, Inject } from '@nestjs/common';
+import { Inject, Logger, Module, OnModuleDestroy } from '@nestjs/common';
 import { createPool } from 'mysql2/promise';
 import type { Pool } from 'mysql2/promise';
 import { existsSync } from 'node:fs';
@@ -19,7 +19,11 @@ export const DB_POOL = 'DB_POOL';
             'Falta DATABASE_URL: copia .env.example a .env y pon tus datos',
           );
         }
-        console.log('Conectando a ' + url);
+        // Solo a dónde se conecta: la URL completa trae usuario y password.
+        const { hostname, port, pathname } = new URL(url);
+        new Logger('Database').log(
+          `Conectando a MySQL en ${hostname}:${port || 3306}${pathname}`,
+        );
         return createPool({ uri: url });
       },
     },

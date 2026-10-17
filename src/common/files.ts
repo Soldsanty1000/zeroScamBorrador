@@ -19,6 +19,12 @@ const TYPES = [
     max: MAX_IMAGE_BYTES,
   },
   {
+    mime: 'image/png',
+    ext: '.png',
+    magic: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    max: MAX_IMAGE_BYTES,
+  },
+  {
     mime: 'application/pdf',
     ext: '.pdf',
     magic: [0x25, 0x50, 0x44, 0x46, 0x2d],

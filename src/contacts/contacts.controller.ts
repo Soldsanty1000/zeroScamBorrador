@@ -27,7 +27,8 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
+import { memoryStorage } from 'multer';
+import { MAX_IMAGE_BYTES } from '../common/files';
 import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt';
@@ -96,8 +97,11 @@ export class ContactsController {
     description: 'Contacto no encontrado',
     type: ErrorResponseDto,
   })
-  findOne(@Param('id') id: string): Promise<ContactResponseDto> {
-    return this.service.findOne(id);
+  findOne(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<ContactResponseDto> {
+    return this.service.findOne(user.sub, id);
   }
 
   @Patch(':id')
@@ -116,19 +120,20 @@ export class ContactsController {
     type: ErrorResponseDto,
   })
   update(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: UpdateContactDto,
   ): Promise<ContactResponseDto> {
-    return this.service.update(id, dto);
+    return this.service.update(user.sub, id, dto);
   }
 
   @Post(':id/photo')
   @UseInterceptors(
+    // En memoria y con tope de tamaño: el service revisa que sea imagen y
+    // la guarda con un nombre aleatorio, nunca con el que mandó el cliente.
     FileInterceptor('photo', {
-      storage: diskStorage({
-        destination: 'uploads',
-        filename: (_req, file, cb) => cb(null, file.originalname),
-      }),
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_IMAGE_BYTES, files: 1 },
     }),
   )
   @ApiOperation({ summary: 'Subir o reemplazar la foto de un contacto' })
@@ -143,7 +148,7 @@ export class ContactsController {
   })
   @ApiCreatedResponse({ type: ContactResponseDto })
   @ApiBadRequestResponse({
-    description: 'No vino ningún archivo',
+    description: 'No vino archivo, no es JPEG/PNG o pesa más de 5 MB',
     type: ErrorResponseDto,
   })
   @ApiNotFoundResponse({
@@ -151,11 +156,12 @@ export class ContactsController {
     type: ErrorResponseDto,
   })
   uploadPhoto(
+    @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
   ): Promise<ContactResponseDto> {
     if (!file) throw new BadRequestException('Falta el campo photo');
-    return this.service.setPhoto(id, file);
+    return this.service.setPhoto(user.sub, id, file.buffer);
   }
 
   @Delete(':id')
@@ -167,7 +173,10 @@ export class ContactsController {
     description: 'Contacto no encontrado',
     type: ErrorResponseDto,
   })
-  remove(@Param('id') id: string): Promise<void> {
-    return this.service.remove(id);
+  remove(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ): Promise<void> {
+    return this.service.remove(user.sub, id);
   }
 }

@@ -58,6 +58,16 @@ El panel es privado: Git pedirá iniciar sesión con una cuenta con acceso (o b�
 
 En `.env`: `DB_HOST=192.168.10.10`, `DB_PORT` igual a `MYSQL_PORT` de la base, `MYSQL_APP_PASSWORD` idéntica a la de la base (letra por letra, incluido cualquier punto), `NEXT_PUBLIC_API_URL=http://192.168.20.10:3000` y `BIND=192.168.20.10`.
 
+`JWT_SECRET` es la llave que firma las sesiones. La API no arranca sin ella. Genérala una vez en PowerShell y pégala en `.env`:
+
+```powershell
+$b = New-Object byte[] 48
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+[Convert]::ToBase64String($b)
+```
+
+Si cambia, todas las sesiones abiertas se cierran (hay que volver a iniciar sesión).
+
 Sin internet en la red del proyecto, compila **antes** de cambiarte a ella (con internet): `docker compose pull mailpit` y `docker compose build`. Ya en la red del proyecto, `docker compose up -d` **sin** `--build`. Si el build se queda en *resolving provenance*: `$env:BUILDX_NO_DEFAULT_ATTESTATIONS=1` y vuelve a compilar.
 
 ```powershell
