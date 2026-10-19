@@ -210,6 +210,7 @@ export class AccountRepository {
         'Notificacion_Alerta',
         'Consulta_URL',
         'Desafio_DosPasos',
+        'Reporte_Idempotencia',
       ]) {
         await conn.query(`DELETE FROM ${table} WHERE id_usuario = ?`, [id]);
       }

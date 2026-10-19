@@ -4,6 +4,7 @@ CREATE DATABASE IF NOT EXISTS ZeroScam;
 USE ZeroScam;
 
 DROP TABLE IF EXISTS Analitica_Evento;
+DROP TABLE IF EXISTS Reporte_Idempotencia;
 DROP TABLE IF EXISTS Desafio_DosPasos;
 DROP TABLE IF EXISTS Comentario;
 DROP TABLE IF EXISTS Reporte_Confirmacion;
@@ -205,6 +206,20 @@ CREATE TABLE Desafio_DosPasos (
   expira      DATETIME  NOT NULL,
   intentos    INT       NOT NULL DEFAULT 0,
   FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario)
+);
+
+-- Claves de idempotencia al crear reportes: cabecera opcional
+-- `Idempotency-Key`. La misma clave del mismo usuario regresa el reporte ya
+-- creado en vez de duplicarlo. Caducan a las 24 horas. Se borran con el reporte.
+CREATE TABLE Reporte_Idempotencia (
+  id_usuario BIGINT      NOT NULL,
+  clave      VARCHAR(64)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  id_reporte BIGINT      NULL,
+  creada     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id_usuario, clave),
+  INDEX idx_idempotencia_creada (creada),
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario),
+  FOREIGN KEY (id_reporte) REFERENCES Reporte(id_reporte) ON DELETE CASCADE
 );
 
 -- Contadores anónimos de uso: un total por evento, sin id de usuario.
