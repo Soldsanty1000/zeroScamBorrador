@@ -306,7 +306,13 @@ datos con:
 
 ```bash
 mysql -u root -p ZeroScam < db/migracion-app.sql
+mysql -u root -p ZeroScam < db/migracion-idempotencia.sql
 ```
+
+La segunda agrega `Reporte_Idempotencia`, que usa la cabecera opcional
+`Idempotency-Key` de `POST /community/reports`: la app la manda al reenviar
+los reportes hechos sin conexión, y la misma clave regresa el reporte ya creado
+en vez de duplicarlo.
 
 **Apuntar la app al servidor.** En Xcode, target PrototipoApp → Build
 Settings: `ZS_FUENTE_DATOS = remote` y `ZS_URL_BASE = http://<ip>:3000`. La
@@ -335,4 +341,5 @@ src/
 └── contacts/            (sin usar: no hay tabla en el modelo ZeroScam)
 db/schema.sql            modelo físico de ZeroScam + catálogos y cuentas de prueba
 db/migracion-app.sql     agrega lo de la app de iOS a una base ya creada
+db/migracion-idempotencia.sql  agrega Reporte_Idempotencia (Idempotency-Key) a una base ya creada
 ```

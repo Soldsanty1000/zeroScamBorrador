@@ -52,8 +52,9 @@ Docker: sobreviven a `down`, a reinicios y a actualizaciones.
 
 - **Empezar de cero** (borra TODO, vuelve a cargar `db/schema.sql`):
   `docker compose down -v && docker compose up -d`
-- **Migraciones** sobre una base ya creada:
+- **Migraciones** sobre una base ya creada (cada una se corre una vez, en orden):
   `docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ZeroScam' < db/migracion-app.sql`
+  y lo mismo con `db/migracion-scrypt.sql` y `db/migracion-idempotencia.sql`.
 - **Respaldo**:
   `docker compose exec db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" ZeroScam' > respaldo.sql`
 
