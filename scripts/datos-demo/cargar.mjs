@@ -126,12 +126,35 @@ for (const p of PEOPLE) {
   tokens[p.key] = await login(email, PASSWORD);
 }
 
+// Los tipos se toman del catálogo de la base, sin importar acentos ni
+// mayúsculas; uno que no exista se manda como "Otro" con su nombre.
+const plain = (t) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const catalog = (await call('GET', '/catalogs')).fraudTypes.map((t) => t.name);
+const fraudType = (wanted) => {
+  const found = catalog.find((name) => plain(name) === plain(wanted));
+  return found ? { fraudType: found } : { fraudType: 'Otro', otherType: wanted.slice(0, 50) };
+};
+
 step('Reportes');
 const created = [];
+// Lo que cada persona ya reportó (por título): correr el script otra vez
+// no duplica, solo completa lo que faltó.
+const mine = {};
+for (const p of PEOPLE) {
+  const list = await call('GET', '/community/reports?scope=mine', tokens[p.key]);
+  mine[p.key] = new Map(list.map((x) => [x.title, x]));
+}
 for (const r of REPORTS) {
+  const existing = mine[r.by].get(r.title);
+  if (existing) {
+    // Si quedó sin moderar (una corrida anterior se cortó), se termina ahora.
+    created.push({ ...r, id: existing.id, existing: existing.status !== 'RECIBIDO' });
+    console.log(`  = #${existing.id} ${r.title.slice(0, 60)} (ya existía)`);
+    continue;
+  }
   const incident = new Date(Date.now() - (r.daysAgo + 1) * DAY);
   const report = await call('POST', '/community/reports', tokens[r.by], {
-    fraudType: r.type, title: r.title, description: r.description,
+    ...fraudType(r.type), title: r.title, description: r.description,
     incidentDate: incident.toISOString(), anonymous: r.daysAgo % 3 === 0, affected: 'YO',
     city: r.city, ...(r.url ? { url: r.url } : {}), ...(r.suspiciousText ? { suspiciousText: r.suspiciousText } : {}),
   });
@@ -147,7 +170,7 @@ for (const r of REPORTS) {
 step('Moderación');
 const status = (id, s, observations) => call('PATCH', `/reports/${id}/status`, admin, { status: s, ...(observations ? { observations } : {}) });
 for (const r of created) {
-  if (r.fate === 'recibido') continue;
+  if (r.fate === 'recibido' || r.existing) continue;
   await status(r.id, 'EN_REVISION');
   if (r.fate === 'revision') continue;
   if (r.fate === 'rechazado') {
@@ -165,7 +188,7 @@ for (const r of created) {
 step('Comunidad');
 const others = (by) => PEOPLE.map((p) => p.key).filter((k) => k !== by);
 let n = 0;
-for (const r of created.filter((x) => x.fate === 'validado' || x.fate === 'canalizado')) {
+for (const r of created.filter((x) => !x.existing && (x.fate === 'validado' || x.fate === 'canalizado'))) {
   const people = others(r.by);
   for (const k of people.slice(0, 2 + (r.id % 4))) {
     await call('POST', `/community/reports/${r.id}/confirmations`, tokens[k]).catch(() => {});
