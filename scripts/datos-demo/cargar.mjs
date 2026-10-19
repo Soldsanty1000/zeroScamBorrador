@@ -92,16 +92,24 @@ async function login(email, password) {
 
 const step = (text) => console.log(`\n== ${text}`);
 
-/** Comenta; si la API pide esperar (429), espera un minuto y reintenta. */
+/**
+ * Comenta; si la API pide esperar (429), espera un minuto y reintenta hasta
+ * 3 veces. Si sigue bloqueado (p. ej. relojes desfasados entre la PC de la
+ * API y la de la base) se salta ese comentario en vez de detener todo.
+ */
 async function comment(id, token, text) {
-  try {
-    await call('POST', `/community/reports/${id}/comments`, token, { text });
-  } catch (e) {
-    if (!String(e.message).includes('429')) throw e;
-    console.log('  (la API pide esperar un minuto entre comentarios…)');
-    await new Promise((r) => setTimeout(r, 61_000));
-    await call('POST', `/community/reports/${id}/comments`, token, { text });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await call('POST', `/community/reports/${id}/comments`, token, { text });
+      return true;
+    } catch (e) {
+      if (!String(e.message).includes('429')) throw e;
+      console.log(`  (la API pide esperar entre comentarios; intento ${attempt} de 3…)`);
+      await new Promise((r) => setTimeout(r, 61_000));
+    }
   }
+  console.log(`  ! se omitió un comentario del reporte #${id}: la API siguió pidiendo esperar`);
+  return false;
 }
 
 await call('GET', '/health');
@@ -188,14 +196,16 @@ for (const r of created) {
 step('Comunidad');
 const others = (by) => PEOPLE.map((p) => p.key).filter((k) => k !== by);
 let n = 0;
-for (const r of created.filter((x) => !x.existing && (x.fate === 'validado' || x.fate === 'canalizado'))) {
+for (const r of created.filter((x) => x.fate === 'validado' || x.fate === 'canalizado')) {
   const people = others(r.by);
+  // Confirmar y guardar dos veces no duplica (la API lo ignora).
   for (const k of people.slice(0, 2 + (r.id % 4))) {
     await call('POST', `/community/reports/${r.id}/confirmations`, tokens[k]).catch(() => {});
   }
   // Comentan dos personas distintas cada vez; la API permite pocos
-  // comentarios por minuto a cada una.
-  for (let i = 0; i < 2; i++) {
+  // comentarios por minuto a cada una. Si ya tiene, solo se completan.
+  const have = (await call('GET', `/community/reports/${r.id}/comments`, tokens[r.by])).length;
+  for (let i = have; i < 2; i++) {
     const k = people[(n + i) % people.length];
     await comment(r.id, tokens[k], COMMENTS[n % COMMENTS.length]);
     n++;
