@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Header,
+  Headers,
   HttpCode,
   Param,
   ParseIntPipe,
@@ -23,6 +24,7 @@ import {
   ApiBody,
   ApiConsumes,
   ApiCreatedResponse,
+  ApiHeader,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -33,6 +35,10 @@ import { AuthGuard } from '../auth/auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt';
 import { MAX_PDF_BYTES } from '../common/files';
+import {
+  IDEMPOTENCY_HEADER,
+  parseIdempotencyKey,
+} from '../reports/idempotency';
 import { CommunityService } from './community.service';
 import {
   CategoryDto,
@@ -121,14 +127,30 @@ export class CommunityController {
   @Post('reports')
   @ApiOperation({
     summary: 'Crear un reporte desde la app',
-    description: 'Nace en RECIBIDO. Máximo 10 por día.',
+    description:
+      'Nace en RECIBIDO. Máximo 10 por día. Cabecera opcional ' +
+      '`Idempotency-Key`: repetir la misma clave (8 a 64 caracteres ' +
+      '`A-Za-z0-9_-`, 24 h) regresa el reporte ya creado en vez de ' +
+      'duplicarlo.',
+  })
+  @ApiHeader({
+    name: IDEMPOTENCY_HEADER,
+    required: false,
+    description:
+      'Clave de idempotencia (8 a 64 caracteres A-Za-z0-9_-). La misma ' +
+      'clave del mismo usuario regresa el reporte ya creado.',
   })
   @ApiCreatedResponse({ type: CommunityReportDto })
   create(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SaveCommunityReportDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<CommunityReportDto> {
-    return this.service.create(user.sub, dto);
+    return this.service.create(
+      user.sub,
+      dto,
+      parseIdempotencyKey(idempotencyKey),
+    );
   }
 
   @Patch('reports/:id')

@@ -116,9 +116,15 @@ export class CommunityService {
 
   // ---------- Crear, editar, eliminar ----------
 
+  /**
+   * @param idempotencyKey - Cabecera `Idempotency-Key` ya validada. Con la
+   * misma clave del mismo usuario se regresa el reporte que ya se creó, sin
+   * duplicarlo y sin contarlo otra vez como enviado.
+   */
   async create(
     userId: string,
     dto: SaveCommunityReportDto,
+    idempotencyKey?: string,
   ): Promise<CommunityReportDto> {
     const me = await this.accounts.requireActive(userId);
     const input = await this.toInput(dto);
@@ -131,8 +137,13 @@ export class CommunityService {
         `Llegaste al límite de ${REPORTS_PER_DAY} reportes por día. Intenta mañana.`,
       );
     }
-    const id = await this.repository.create(me.id, input);
-    await this.analytics.count('reporte_enviado', me.id);
+    const { id, replayed } = await this.repository.create(
+      me.id,
+      input,
+      idempotencyKey,
+    );
+    // La analítica cuenta envíos, no reintentos de una clave ya usada.
+    if (!replayed) await this.analytics.count('reporte_enviado', me.id);
     return toView((await this.repository.findById(me.id, id))!, me);
   }
 

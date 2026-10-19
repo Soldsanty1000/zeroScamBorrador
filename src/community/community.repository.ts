@@ -9,6 +9,11 @@ import type {
   RowDataPacket,
 } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
+import {
+  bindIdempotencyKey,
+  claimIdempotencyKey,
+  pruneIdempotencyKeys,
+} from '../reports/idempotency';
 
 const PUBLIC = "('VALIDADO', 'CANALIZADO')";
 
@@ -210,8 +215,32 @@ export class CommunityRepository {
    *
    * @returns El `id_reporte` nuevo.
    */
-  async create(ownerId: number, input: ReportInput): Promise<number> {
-    return this.transaction(async (conn) => {
+  /**
+   * Crea un reporte desde la app.
+   *
+   * Con `idempotencyKey`, repetir la misma clave regresa el reporte que ya se
+   * creó, sin duplicarlo (por ejemplo, la cola de envíos de la app reintenta
+   * cuando se cortó la red antes de ver la respuesta).
+   *
+   * @param idempotencyKey - Cabecera `Idempotency-Key` ya validada, si vino.
+   * @returns El `id_reporte` nuevo, o el que ya se había creado con esa clave
+   * (`replayed: true`).
+   */
+  async create(
+    ownerId: number,
+    input: ReportInput,
+    idempotencyKey?: string,
+  ): Promise<{ id: number; replayed: boolean }> {
+    const created = await this.transaction(async (conn) => {
+      if (idempotencyKey) {
+        const existing = await claimIdempotencyKey(
+          conn,
+          ownerId,
+          idempotencyKey,
+        );
+        // Reintento de una creación que sí llegó: no se crea nada.
+        if (existing !== undefined) return { id: existing, replayed: true };
+      }
       const [result] = await conn.query<ResultSetHeader>(
         `INSERT INTO Reporte (id_usuario, id_tipo_fraude, id_estado, descripcion_incidente,
                               fecha_incidente, titulo, ciudad, es_anonimo, afectado, tipo_otro, texto_sospechoso)
@@ -243,8 +272,13 @@ export class CommunityRepository {
          WHERE ro.nombre_rol IN ('Administrador', 'Owner') AND u.estado_cuenta = 'ACTIVO' AND u.id_usuario <> ?`,
         [id, `Nuevo reporte #${id} por revisar`, ownerId],
       );
-      return id;
+      if (idempotencyKey) {
+        await bindIdempotencyKey(conn, ownerId, idempotencyKey, id);
+      }
+      return { id, replayed: false };
     });
+    if (idempotencyKey) await pruneIdempotencyKeys(this.pool);
+    return created;
   }
 
   /**
