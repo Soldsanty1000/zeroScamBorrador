@@ -57,6 +57,7 @@ CREATE TABLE Usuario (
   pref_perfil_publico  BOOLEAN      NOT NULL DEFAULT FALSE,
   pref_analiticas      BOOLEAN      NOT NULL DEFAULT TRUE,
   version_aviso        VARCHAR(10)  NULL COMMENT 'Versión del aviso de privacidad aceptada',
+  contrasena_cambiada  DATETIME     NULL COMMENT 'Último cambio de contraseña; los refresh tokens anteriores ya no sirven',
   FOREIGN KEY (id_rol) REFERENCES Rol(id_rol)
 );
 
@@ -205,6 +206,20 @@ CREATE TABLE Desafio_DosPasos (
   codigo_hash CHAR(64)  NOT NULL,
   expira      DATETIME  NOT NULL,
   intentos    INT       NOT NULL DEFAULT 0,
+  FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario)
+);
+
+-- Código de un solo uso enviado por correo para recuperar (RECUPERAR) o
+-- cambiar (CAMBIAR) la contraseña. Se guarda su hash; a los 3 intentos
+-- fallidos la fila se borra.
+CREATE TABLE Codigo_Correo (
+  id_codigo   CHAR(64)     PRIMARY KEY,
+  id_usuario  BIGINT       NOT NULL,
+  proposito   VARCHAR(10)  NOT NULL COMMENT 'RECUPERAR o CAMBIAR',
+  codigo_hash CHAR(64)     NOT NULL,
+  expira      DATETIME     NOT NULL,
+  intentos    INT          NOT NULL DEFAULT 0,
+  INDEX idx_codigo_usuario (id_usuario, proposito),
   FOREIGN KEY (id_usuario) REFERENCES Usuario(id_usuario)
 );
 

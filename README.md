@@ -78,7 +78,10 @@ Bearer desde Swagger UI: haz login, copia el `accessToken` y pégalo en
 | POST   | `/auth/login`              | —                    | Regresa `accessToken` (15 min) y `refreshToken` (7 días). 403 si la cuenta está suspendida |
 | POST   | `/auth/refresh`            | —                    | Access token nuevo a partir del refresh |
 | POST   | `/auth/logout`             | cualquiera           | 204; la app borra sus tokens |
-| PATCH  | `/auth/password`           | cualquiera           | Cambia mi password (`currentPassword`, `newPassword`); 204 |
+| POST   | `/auth/password/code`      | cualquiera           | Manda al correo el código para cambiar el password (10 min, 3 intentos) |
+| PATCH  | `/auth/password`           | cualquiera           | Cambia mi password (`currentPassword`, `newPassword`, `challengeId`, `code`); avisa por correo y regresa tokens nuevos |
+| POST   | `/auth/password/forgot`    | —                    | Olvidé mi password: manda un código si el correo tiene cuenta (misma respuesta si no) |
+| POST   | `/auth/password/reset`     | —                    | Password nuevo con el código (`challengeId`, `code`, `newPassword`); 204 |
 | GET    | `/users/me`                | cualquiera           | Mi perfil |
 | PATCH  | `/users/me`                | cualquiera           | Edita mi `name`, `lastName` o `country` |
 | GET    | `/users`                   | Admin, Owner         | Lista cuentas (`?role=&accountStatus=&q=`) |
@@ -307,7 +310,12 @@ datos con:
 ```bash
 mysql -u root -p ZeroScam < db/migracion-app.sql
 mysql -u root -p ZeroScam < db/migracion-idempotencia.sql
+mysql -u root -p ZeroScam < db/migracion-contrasena-correo.sql
 ```
+
+`migracion-contrasena-correo.sql` agrega `Codigo_Correo` (códigos para
+recuperar o cambiar el password) y `Usuario.contrasena_cambiada`. Sin ella
+este API no arranca bien: lee esa columna en cada login.
 
 La segunda agrega `Reporte_Idempotencia`, que usa la cabecera opcional
 `Idempotency-Key` de `POST /community/reports`: la app la manda al reenviar

@@ -136,6 +136,14 @@ Get-Content db\migracion-scrypt.sql | docker exec -i zeroscam-db sh -c 'mysql -u
 
 Actualiza las cuentas de arranque (owner, admin y policía, password `ZeroScam123!`) y lista las que sigan con el hash viejo: esas tienen que registrarse otra vez.
 
+## Migración de contraseña por correo (una sola vez)
+
+Recuperar y cambiar la contraseña con código por correo usa la tabla `Codigo_Correo` y la columna `Usuario.contrasena_cambiada`. Si la base se creó antes, corre **antes** de levantar la API nueva:
+
+```powershell
+Get-Content db\migracion-contrasena-correo.sql | docker exec -i zeroscam-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ZeroScam'
+```
+
 ## Migración de idempotencia (una sola vez)
 
 La app de iOS guarda los reportes hechos sin conexión y los reenvía con la cabecera `Idempotency-Key` para no duplicarlos. Si la base se creó antes de ese cambio, después de actualizar la API corre en la PC de la base (dentro de la carpeta del repo):

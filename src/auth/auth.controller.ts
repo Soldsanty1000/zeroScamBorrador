@@ -16,6 +16,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import {
@@ -30,7 +31,11 @@ import {
   RefreshResponseDto,
   RegisterResponseDto,
 } from './dto/auth-response.dto';
-import { ChangePasswordDto } from './dto/change-password.dto';
+import {
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -149,21 +154,43 @@ export class AuthController {
   })
   logout(): void {}
 
+  @Post('password/code')
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Pedir el código para cambiar mi password',
+    description:
+      'Manda al correo de la cuenta un código de 6 dígitos (10 minutos, 3 ' +
+      'intentos) que pide `PATCH /auth/password`.',
+  })
+  @ApiOkResponse({ description: '`challengeId`, `destination` y `expiresAt`' })
+  @ApiTooManyRequestsResponse({
+    description: 'Más de 3 códigos en 15 minutos',
+    type: ErrorResponseDto,
+  })
+  requestChangeCode(@CurrentUser() user: JwtPayload) {
+    return this.service.requestChangeCode(user.sub);
+  }
+
   @Patch('password')
-  @HttpCode(204)
+  @HttpCode(200)
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Cambiar mi password',
     description:
-      'Cualquier rol. Pide el password actual y el nuevo, que debe cumplir ' +
-      'las reglas del registro. Los tokens ya emitidos siguen sirviendo ' +
-      'hasta que expiran.',
+      'Cualquier rol. Pide el password actual, el nuevo (reglas del ' +
+      'registro) y el código de `POST /auth/password/code`. Avisa por ' +
+      'correo y regresa tokens nuevos: los refresh tokens emitidos antes ya ' +
+      'no se renuevan (las demás sesiones se cierran al vencer su access ' +
+      'token).',
   })
-  @ApiNoContentResponse({ description: 'Password cambiado, sin cuerpo' })
+  @ApiOkResponse({ type: LoginResponseDto })
   @ApiBadRequestResponse({
     description:
-      'Body inválido, password actual incorrecto o nuevo igual al actual',
+      'Body inválido, password actual incorrecto, nuevo igual al actual o ' +
+      'código inválido',
     type: ValidationErrorResponseDto,
   })
   @ApiUnauthorizedResponse({
@@ -173,7 +200,42 @@ export class AuthController {
   changePassword(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangePasswordDto,
-  ): Promise<void> {
+  ) {
     return this.service.changePassword(user.sub, dto);
+  }
+
+  @Post('password/forgot')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Olvidé mi password',
+    description:
+      'Si el correo tiene una cuenta activa, le manda un código de 6 dígitos ' +
+      '(10 minutos, 3 intentos). La respuesta es la misma exista o no la ' +
+      'cuenta, para no revelar qué correos están registrados.',
+  })
+  @ApiOkResponse({ description: '`challengeId`, `expiresAt` y `message`' })
+  @ApiBadRequestResponse({
+    description: 'Correo inválido',
+    type: ValidationErrorResponseDto,
+  })
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.service.forgotPassword(dto);
+  }
+
+  @Post('password/reset')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Poner un password nuevo con el código del correo',
+    description:
+      'Cambia el password, avisa por correo y cierra las demás sesiones ' +
+      '(sus refresh tokens dejan de servir).',
+  })
+  @ApiNoContentResponse({ description: 'Password cambiado, sin cuerpo' })
+  @ApiBadRequestResponse({
+    description: 'Body inválido, o código inválido, vencido o sin intentos',
+    type: ValidationErrorResponseDto,
+  })
+  resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
+    return this.service.resetPassword(dto);
   }
 }
