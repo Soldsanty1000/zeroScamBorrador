@@ -5,7 +5,7 @@ import {
   randomInt,
   timingSafeEqual,
 } from 'node:crypto';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
 import { MailService } from './mail.service';
 
@@ -85,6 +85,10 @@ export class TwoFactorService {
   /**
    * Comprueba el código de un desafío y lo consume.
    *
+   * El intento se gasta antes de comparar y en una sola sentencia, para que
+   * peticiones simultáneas no puedan probar más de {@link MAX_ATTEMPTS}
+   * códigos (igual que en `EmailCodeService.verify`).
+   *
    * @returns El `id_usuario` dueño del desafío.
    * @throws {@link UnauthorizedException} si el desafío no existe, expiró o el
    * código no coincide. Siempre el mismo mensaje, para no dar pistas.
@@ -93,8 +97,14 @@ export class TwoFactorService {
     const invalid = new UnauthorizedException(
       'El código no es válido o ya expiró',
     );
+    const [spent] = await this.pool.query<ResultSetHeader>(
+      `UPDATE Desafio_DosPasos SET intentos = intentos + 1
+       WHERE id_desafio = ? AND expira > NOW() AND intentos < ?`,
+      [challengeId, MAX_ATTEMPTS],
+    );
+    if (spent.affectedRows === 0) throw invalid;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      'SELECT id_usuario, codigo_hash, intentos FROM Desafio_DosPasos WHERE id_desafio = ? AND expira > NOW()',
+      'SELECT id_usuario, codigo_hash, intentos FROM Desafio_DosPasos WHERE id_desafio = ?',
       [challengeId],
     );
     const row = rows[0];
@@ -102,17 +112,11 @@ export class TwoFactorService {
     const expected = Buffer.from(String(row.codigo_hash));
     const received = Buffer.from(sha256(code));
     if (!timingSafeEqual(expected, received)) {
-      if (Number(row.intentos) + 1 >= MAX_ATTEMPTS) {
-        await this.remove(challengeId);
-      } else {
-        await this.pool.query(
-          'UPDATE Desafio_DosPasos SET intentos = intentos + 1 WHERE id_desafio = ?',
-          [challengeId],
-        );
-      }
+      if (Number(row.intentos) >= MAX_ATTEMPTS) await this.remove(challengeId);
       throw invalid;
     }
-    await this.remove(challengeId);
+    // Solo una petición puede consumirlo (un solo login por código).
+    if (!(await this.remove(challengeId))) throw invalid;
     return String(row.id_usuario);
   }
 
@@ -123,10 +127,13 @@ export class TwoFactorService {
     ]);
   }
 
-  private async remove(challengeId: string): Promise<void> {
-    await this.pool.query('DELETE FROM Desafio_DosPasos WHERE id_desafio = ?', [
-      challengeId,
-    ]);
+  /** Borra el desafío; dice si todavía estaba (para consumirlo una sola vez). */
+  private async remove(challengeId: string): Promise<boolean> {
+    const [result] = await this.pool.query<ResultSetHeader>(
+      'DELETE FROM Desafio_DosPasos WHERE id_desafio = ?',
+      [challengeId],
+    );
+    return result.affectedRows > 0;
   }
 }
 

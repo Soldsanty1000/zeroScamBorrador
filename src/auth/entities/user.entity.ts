@@ -19,4 +19,9 @@ export class User {
    * no la tienen.
    */
   privacyAcceptedAt: Date | undefined;
+  /**
+   * `contrasena_cambiada`: último cambio de contraseña. Los refresh tokens
+   * emitidos antes ya no se renuevan.
+   */
+  passwordChangedAt: Date | undefined;
 }

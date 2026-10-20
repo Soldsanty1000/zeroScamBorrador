@@ -47,6 +47,12 @@ export interface JwtPayload {
   type: 'access' | 'refresh';
   /** Emitido en (segundos Unix). */
   iat: number;
+  /**
+   * Emitido en (milisegundos Unix). `iat` es por segundo: con esto se sabe si
+   * un token del mismo segundo que un cambio de contraseña salió antes o
+   * después. Los tokens anteriores a este campo no lo traen.
+   */
+  iatMs?: number;
   /** Expira en (segundos Unix). */
   exp: number;
 }
@@ -70,11 +76,13 @@ function hmac(data: string): string {
  * @returns El JWT como `header.payload.firma`.
  */
 export function sign(
-  payload: Omit<JwtPayload, 'iat' | 'exp'>,
+  payload: Omit<JwtPayload, 'iat' | 'iatMs' | 'exp'>,
   ttlSeconds: number,
 ): string {
   const header = b64url({ alg: 'HS256', typ: 'JWT' });
-  const body = b64url({ ...payload, iat: now(), exp: now() + ttlSeconds });
+  const ms = Date.now();
+  const iat = Math.floor(ms / 1000);
+  const body = b64url({ ...payload, iat, iatMs: ms, exp: iat + ttlSeconds });
   const signature = hmac(`${header}.${body}`);
   return `${header}.${body}.${signature}`;
 }

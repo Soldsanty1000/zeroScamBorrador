@@ -3,9 +3,16 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ChangePasswordDto } from './dto/change-password.dto';
+import {
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto/change-password.dto';
+import { EmailCodeChallenge, EmailCodeService } from './email-code.service';
+import { MailService } from './mail.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -24,10 +31,14 @@ const REFRESH_TTL = 7 * 24 * 60 * 60; // 7 días
  */
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly users: UsersRepository,
     private readonly twoFactor: TwoFactorService,
     private readonly analytics: AnalyticsService,
+    private readonly emailCodes: EmailCodeService,
+    private readonly mail: MailService,
   ) {}
 
   /**
@@ -145,13 +156,21 @@ export class AuthService {
    * @throws {@link UnauthorizedException} si el token es inválido, expiró o no
    * es de tipo `refresh`.
    */
-  refresh(dto: RefreshDto): { accessToken: string } {
-    // No consulta la base: `sub` y `email` vienen dentro del token, y la firma
-    // garantiza que lo emitimos nosotros.
+  async refresh(dto: RefreshDto): Promise<{ accessToken: string }> {
     const payload = verify(dto.refreshToken!);
     // Exigir `type: 'refresh'` impide encadenar access tokens: sin esto, cada
     // access podría canjearse por otro y la sesión nunca caducaría.
     if (!payload || payload.type !== 'refresh') {
+      throw new UnauthorizedException('Refresh token inválido');
+    }
+    // La firma prueba que lo emitimos, pero no que la sesión siga valiendo:
+    // una cuenta suspendida o eliminada ya no renueva, y tras un cambio de
+    // contraseña los refresh tokens de antes dejan de servir (quien tuviera
+    // la cuenta pierde el acceso al vencer su access token de 15 minutos).
+    const user = await this.users.findById(payload.sub);
+    const changed = user?.passwordChangedAt?.getTime() ?? 0;
+    const issued = payload.iatMs ?? payload.iat * 1000;
+    if (!user || user.accountStatus !== 'ACTIVO' || issued < changed) {
       throw new UnauthorizedException('Refresh token inválido');
     }
     const accessToken = sign(
@@ -167,34 +186,160 @@ export class AuthService {
   }
 
   /**
-   * Cambia el password del usuario del token.
+   * Manda al correo de la cuenta el código para cambiar el password con la
+   * sesión abierta. Con el código, quien encuentre el teléfono desbloqueado
+   * no puede cambiarlo sin tener también el correo.
    *
-   * @param userId - `sub` del access token.
-   * @param dto - Password actual y nuevo; el nuevo ya cumple las reglas del
-   * registro.
-   * @throws {@link UnauthorizedException} si la cuenta del token ya no existe.
-   * @throws {@link BadRequestException} si el password actual no coincide o
-   * el nuevo es igual al actual.
+   * @throws {@link HttpException} 429 si ya pidió {@link SEND_LIMIT} códigos.
    */
-  async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
+  async requestChangeCode(userId: string): Promise<EmailCodeChallenge> {
     const user = await this.users.findById(userId);
-    if (!user) {
+    if (!user || user.accountStatus !== 'ACTIVO') {
       throw new UnauthorizedException('El usuario no existe');
     }
-    // Pedir el password actual evita que alguien con un token ajeno (o con
-    // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
-    // no un 401: el token es válido, lo que está mal es el dato.
-    if (!(await verifyPassword(dto.currentPassword!, user.passwordHash))) {
-      throw new BadRequestException('El password actual es incorrecto');
+    return this.emailCodes.create(
+      this.emailCodes.newId(),
+      user.id!,
+      user.email!,
+      'CAMBIAR',
+    );
+  }
+
+  /**
+   * Cambia el password del usuario del token. Pide el password actual y el
+   * código que llegó al correo, avisa por correo y regresa tokens nuevos:
+   * los de antes de este cambio ya no se renuevan.
+   *
+   * @param userId - `sub` del access token.
+   * @param dto - Password actual, nuevo, `challengeId` y código.
+   * @throws {@link UnauthorizedException} si la cuenta del token ya no existe.
+   * @throws {@link BadRequestException} si el nuevo es igual al actual, el
+   * código no sirve o el password actual no coincide (el código ya se gastó).
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const user = await this.users.findById(userId);
+    if (!user || user.accountStatus !== 'ACTIVO') {
+      throw new UnauthorizedException('El usuario no existe');
     }
     if (dto.newPassword === dto.currentPassword) {
       throw new BadRequestException(
         'El password nuevo debe ser distinto al actual',
       );
     }
+    // El código va antes que el password actual: sin un código del correo,
+    // un token robado no sirve para adivinar el password, y con él cada
+    // intento gasta el código (3 códigos cada 15 minutos).
+    const owner = await this.emailCodes.verify(
+      dto.challengeId!,
+      dto.code!,
+      'CAMBIAR',
+      user.id,
+    );
+    if (owner !== user.id) {
+      throw new BadRequestException('El código no es válido o ya expiró');
+    }
+    // Pedir el password actual evita que alguien con un token ajeno (o con
+    // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
+    // no un 401: el token es válido, lo que está mal es el dato.
+    if (!(await verifyPassword(dto.currentPassword!, user.passwordHash))) {
+      throw new BadRequestException(
+        'El password actual es incorrecto. Pide un código nuevo.',
+      );
+    }
     await this.users.updatePassword(
       userId,
       await hashPassword(dto.newPassword!),
     );
+    await this.afterPasswordChange(user.id!, user.email!, 'cambio');
+    const claims = { sub: user.id!, email: user.email!, role: user.role! };
+    return {
+      accessToken: sign({ ...claims, type: 'access' }, ACCESS_TTL),
+      refreshToken: sign({ ...claims, type: 'refresh' }, REFRESH_TTL),
+    };
+  }
+
+  /**
+   * "Olvidé mi contraseña": manda un código al correo si tiene una cuenta
+   * activa. La respuesta es la misma exista o no la cuenta (un `challengeId`
+   * nuevo y su vencimiento), y el correo se manda sin esperarlo, para que ni
+   * el contenido ni el tiempo de respuesta digan qué correos están
+   * registrados.
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{
+    challengeId: string;
+    expiresAt: string;
+    message: string;
+  }> {
+    const id = this.emailCodes.newId();
+    const answer = {
+      challengeId: id,
+      expiresAt: this.emailCodes.expiresFromNow(),
+      message:
+        'Si el correo tiene una cuenta, te enviamos un código para poner una contraseña nueva.',
+    };
+    const user = await this.users.findByEmail(dto.email!.trim().toLowerCase());
+    if (!user || user.accountStatus !== 'ACTIVO') return answer;
+    this.emailCodes
+      .create(id, user.id!, user.email!, 'RECUPERAR')
+      .catch((err: unknown) =>
+        // Límite alcanzado o correo caído: la respuesta ya salió igual.
+        this.logger.warn(
+          'No se mandó un código de recuperación: ' +
+            (err instanceof Error ? err.message : String(err)),
+        ),
+      );
+    return answer;
+  }
+
+  /**
+   * Pone un password nuevo con el código de "Olvidé mi contraseña". Cierra
+   * las demás sesiones (sus refresh tokens dejan de servir) y avisa por
+   * correo.
+   *
+   * @throws {@link BadRequestException} con el mismo mensaje si el código no
+   * existe, expiró, se agotaron los intentos o la cuenta ya no está activa.
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<void> {
+    const invalid = new BadRequestException(
+      'El código no es válido o ya expiró',
+    );
+    const userId = await this.emailCodes.verify(
+      dto.challengeId!,
+      dto.code!,
+      'RECUPERAR',
+    );
+    if (!userId) throw invalid;
+    const user = await this.users.findById(userId);
+    if (!user || user.accountStatus !== 'ACTIVO') throw invalid;
+    await this.users.updatePassword(
+      userId,
+      await hashPassword(dto.newPassword!),
+    );
+    await this.afterPasswordChange(user.id!, user.email!, 'recuperacion');
+  }
+
+  /**
+   * Después de cualquier cambio de password: anula códigos y desafíos
+   * pendientes y avisa al correo. Si el aviso no sale, el cambio ya quedó;
+   * solo se registra.
+   */
+  private async afterPasswordChange(
+    userId: string,
+    email: string,
+    how: 'cambio' | 'recuperacion',
+  ): Promise<void> {
+    await this.emailCodes.clear(userId);
+    await this.twoFactor.clear(userId);
+    await this.mail
+      .sendPasswordChanged(email, new Date(), how)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          'No se mandó el aviso de contraseña cambiada: ' +
+            (err instanceof Error ? err.message : String(err)),
+        ),
+      );
   }
 }

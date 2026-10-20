@@ -5,7 +5,8 @@ import { User } from './entities/user.entity';
 
 const COLUMNS =
   'u.id_usuario, u.correo_electronico, u.contrasena_hash, u.nombre, u.apellido, ' +
-  'u.pais, u.alias, u.estado_cuenta, u.fecha_registro, u.fecha_consentimiento, r.nombre_rol';
+  'u.pais, u.alias, u.estado_cuenta, u.fecha_registro, u.fecha_consentimiento, ' +
+  'u.contrasena_cambiada, r.nombre_rol';
 
 /**
  * Acceso a la tabla `Usuario` de MySQL.
@@ -160,9 +161,12 @@ export class UsersRepository {
    * @param passwordHash - Hash del password nuevo (ver `auth/password.ts`).
    */
   async updatePassword(id: string, passwordHash: string): Promise<void> {
+    // La fecha del cambio invalida los refresh tokens emitidos antes. Va con
+    // milisegundos y la pone Node, no `NOW()`: se compara con la hora de
+    // emisión del token, que también sale del reloj de Node.
     await this.pool.query(
-      'UPDATE Usuario SET contrasena_hash = ? WHERE id_usuario = ?',
-      [passwordHash, id],
+      'UPDATE Usuario SET contrasena_hash = ?, contrasena_cambiada = ? WHERE id_usuario = ?',
+      [passwordHash, new Date(), id],
     );
   }
 }
@@ -180,6 +184,7 @@ interface UserRow {
   estado_cuenta: string;
   fecha_registro: Date;
   fecha_consentimiento: Date | null;
+  contrasena_cambiada: Date | null;
 }
 
 /**
@@ -203,5 +208,6 @@ function toEntity(row: RowDataPacket): User {
   user.accountStatus = r.estado_cuenta;
   user.createdAt = r.fecha_registro;
   user.privacyAcceptedAt = r.fecha_consentimiento ?? undefined;
+  user.passwordChangedAt = r.contrasena_cambiada ?? undefined;
   return user;
 }
