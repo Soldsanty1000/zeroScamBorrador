@@ -40,6 +40,9 @@ export class ReporterDto {
   @ApiProperty({ example: 'Azul' })
   lastName: string;
 
+  @ApiProperty({ example: 'dana.azul', description: 'Nombre de usuario' })
+  alias: string;
+
   @ApiProperty({ example: 'dana@example.com' })
   email: string;
 
@@ -51,6 +54,7 @@ export class ReporterDto {
     dto.id = user.id!;
     dto.name = user.name!;
     dto.lastName = user.lastName!;
+    dto.alias = user.alias!;
     dto.email = user.email!;
     dto.country = user.country!;
     return dto;

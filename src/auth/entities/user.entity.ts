@@ -6,6 +6,8 @@ export class User {
   name: string | undefined;
   lastName: string | undefined;
   country: string | undefined;
+  /** Nombre de usuario público (`alias`); el que se edita en la app. */
+  alias: string | undefined;
   /** `nombre_rol` del rol asignado. */
   role: string | undefined;
   /** `estado_cuenta`: ACTIVO o SUSPENDIDO. */

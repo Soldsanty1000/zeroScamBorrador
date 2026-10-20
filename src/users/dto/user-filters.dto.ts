@@ -14,7 +14,7 @@ export class UserFiltersDto {
   accountStatus?: string;
 
   @ApiPropertyOptional({
-    description: 'Texto a buscar en nombre, apellido o email',
+    description: 'Texto a buscar en nombre, apellido, alias o email',
     example: 'danna',
   })
   @IsOptional()

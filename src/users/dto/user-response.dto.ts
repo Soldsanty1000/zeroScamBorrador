@@ -14,6 +14,12 @@ export class UserResponseDto {
   @ApiProperty({ example: 'México' })
   country: string;
 
+  @ApiProperty({
+    example: 'dana.azul',
+    description: 'Nombre de usuario que la persona edita en la app',
+  })
+  alias: string;
+
   @ApiProperty({ example: 'dana@example.com' })
   email: string;
 
@@ -48,6 +54,7 @@ export class UserResponseDto {
     dto.name = user.name!;
     dto.lastName = user.lastName!;
     dto.country = user.country!;
+    dto.alias = user.alias!;
     dto.email = user.email!;
     dto.role = user.role!;
     dto.accountStatus = user.accountStatus!;
