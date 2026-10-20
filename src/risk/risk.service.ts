@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { RISK_LEVELS } from '../common/constants';
 import { checkBlacklist } from './checks/blacklist.check';
 import { checkCertificate } from './checks/certificate.check';
@@ -21,6 +21,15 @@ const CACHE_HOURS = 24;
  */
 const ALERT_DAYS = 30;
 
+/**
+ * Análisis nuevos (no los del caché) que una cuenta puede pedir por ventana.
+ * Cada uno hace que el servidor se conecte al sitio, a RDAP y a Safe
+ * Browsing: sin límite, una cuenta podría usarlo para hacer peticiones sin
+ * fin a terceros o agotar la cuota de Safe Browsing.
+ */
+export const ANALYZE_LIMIT = 20;
+export const ANALYZE_WINDOW_MS = 10 * 60 * 1000;
+
 /** Nivel de una URL que todavía no está en `SitioWeb_URL`. */
 const UNKNOWN_LEVEL = 'BAJO';
 
@@ -30,6 +39,12 @@ const UNKNOWN_LEVEL = 'BAJO';
  */
 @Injectable()
 export class RiskService {
+  /**
+   * Momentos de los análisis nuevos recientes por cuenta. Vive en memoria:
+   * con varias instancias del API cada una cuenta los suyos.
+   */
+  private readonly recentAnalyses = new Map<string, number[]>();
+
   constructor(private readonly repository: RiskRepository) {}
 
   /**
@@ -109,6 +124,7 @@ export class RiskService {
       };
     }
 
+    this.takeAnalysisSlot(userId);
     const target = await resolveTarget(url);
     // Las verificaciones no dependen entre sí: van en paralelo para que la
     // respuesta tarde lo que la más lenta, no la suma (RNF01). Ninguna lanza
@@ -197,6 +213,27 @@ export class RiskService {
         );
       }
     }
+  }
+
+  /**
+   * Cuenta un análisis nuevo de `userId` o lanza 429 si ya pidió
+   * {@link ANALYZE_LIMIT} en la ventana. Los análisis del caché no cuentan:
+   * no salen del servidor.
+   */
+  private takeAnalysisSlot(userId: string): void {
+    const now = Date.now();
+    const recent = (this.recentAnalyses.get(userId) ?? []).filter(
+      (t) => now - t < ANALYZE_WINDOW_MS,
+    );
+    if (recent.length >= ANALYZE_LIMIT) {
+      this.recentAnalyses.set(userId, recent);
+      throw new HttpException(
+        'Analizaste muchos enlaces seguidos. Espera unos minutos e inténtalo de nuevo.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    recent.push(now);
+    this.recentAnalyses.set(userId, recent);
   }
 
   /**

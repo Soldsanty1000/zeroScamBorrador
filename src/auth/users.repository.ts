@@ -5,7 +5,8 @@ import { User } from './entities/user.entity';
 
 const COLUMNS =
   'u.id_usuario, u.correo_electronico, u.contrasena_hash, u.nombre, u.apellido, ' +
-  'u.pais, u.estado_cuenta, u.fecha_registro, u.fecha_consentimiento, u.contrasena_cambiada, r.nombre_rol';
+  'u.pais, u.alias, u.estado_cuenta, u.fecha_registro, u.fecha_consentimiento, ' +
+  'u.contrasena_cambiada, r.nombre_rol';
 
 /**
  * Acceso a la tabla `Usuario` de MySQL.
@@ -73,7 +74,7 @@ export class UsersRepository {
    * Lista usuarios, opcionalmente filtrados (RF03).
    *
    * @param filters - Rol, estado de cuenta y texto a buscar en nombre,
-   * apellido o email; los que no vengan no filtran.
+   * apellido, alias o email; los que no vengan no filtran.
    * @returns Los usuarios ordenados por fecha de registro.
    */
   async findAll(filters: {
@@ -94,10 +95,13 @@ export class UsersRepository {
     }
     if (filters.q) {
       const like = `%${filters.q}%`;
+      // El alias por defecto (`usuario<id>`) no está guardado: se arma igual
+      // que en `account.repository.ts` para que también se encuentre.
       where.push(
-        '(u.nombre LIKE ? OR u.apellido LIKE ? OR u.correo_electronico LIKE ?)',
+        `(u.nombre LIKE ? OR u.apellido LIKE ? OR u.correo_electronico LIKE ?
+          OR COALESCE(u.alias, CONCAT('usuario', u.id_usuario)) LIKE ?)`,
       );
-      params.push(like, like, like);
+      params.push(like, like, like, like);
     }
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT ${COLUMNS} FROM Usuario u JOIN Rol r ON r.id_rol = u.id_rol
@@ -173,6 +177,7 @@ interface UserRow {
   nombre: string;
   apellido: string;
   pais: string;
+  alias: string | null;
   nombre_rol: string;
   estado_cuenta: string;
   fecha_registro: Date;
@@ -195,6 +200,8 @@ function toEntity(row: RowDataPacket): User {
   user.name = r.nombre;
   user.lastName = r.apellido;
   user.country = r.pais;
+  // Sin alias guardado vale el de por defecto, el mismo que ve la app.
+  user.alias = r.alias ?? `usuario${r.id_usuario}`;
   user.role = r.nombre_rol;
   user.accountStatus = r.estado_cuenta;
   user.createdAt = r.fecha_registro;

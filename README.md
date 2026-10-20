@@ -247,6 +247,7 @@ detalle de cada body está en `/docs` (tags `account` y `community`).
 | GET    | `/account`                           | Mi cuenta: perfil, alias, biografía, preferencias y consentimiento |
 | PATCH  | `/account`                           | Edita mi perfil; cambiar el email pide `currentPassword` |
 | PATCH  | `/account/preferences`               | Preferencias; apagar `twoStep` pide `password` |
+| PATCH  | `/account/privacy`                   | Acepta otra versión del aviso de privacidad (`version`, p. ej. `2026-10c`) |
 | POST   | `/account/avatar`                    | Sube mi avatar (`multipart/form-data`, campo `file`, JPEG ≤ 5 MB) |
 | DELETE | `/account/avatar`                    | Quita mi avatar |
 | GET    | `/account/avatar/:id`                | Avatar de una cuenta (propio, de perfil público, o cualquiera si moderas) |

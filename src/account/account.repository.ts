@@ -99,6 +99,17 @@ export class AccountRepository {
     return rows.length > 0;
   }
 
+  /**
+   * Deja constancia de que la cuenta aceptó otra versión del aviso de
+   * privacidad: cuál y cuándo.
+   */
+  async acceptPrivacy(id: number, version: string): Promise<void> {
+    await this.pool.query(
+      'UPDATE Usuario SET version_aviso = ?, fecha_consentimiento = NOW() WHERE id_usuario = ?',
+      [version, id],
+    );
+  }
+
   /** Alias y versión del aviso de una cuenta recién registrada. */
   async completeRegistration(
     id: string,
