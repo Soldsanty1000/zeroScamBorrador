@@ -13,6 +13,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
@@ -74,6 +75,12 @@ export class RiskController {
       'URL inválida, con un puerto distinto de 80/443 o que apunta a una ' +
       'dirección interna',
     type: ValidationErrorResponseDto,
+  })
+  @ApiTooManyRequestsResponse({
+    description:
+      'La cuenta pidió 20 análisis nuevos en 10 minutos (los del caché no ' +
+      'cuentan)',
+    type: ErrorResponseDto,
   })
   analyze(
     @CurrentUser() user: JwtPayload,
