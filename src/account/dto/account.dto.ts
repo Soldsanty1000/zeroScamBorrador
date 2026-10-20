@@ -13,6 +13,8 @@ import { RegisterDto } from '../../auth/dto/register.dto';
 import type { Preferences, Profile } from '../account.repository';
 
 const ALIAS = /^[a-z0-9_.]{3,20}$/;
+/** Versión del aviso de privacidad: `2026-10`, `2026-10b`... */
+const PRIVACY_VERSION = /^\d{4}-\d{2}[a-z]?$/;
 const ALIAS_MESSAGE =
   'alias lleva de 3 a 20 caracteres: minúsculas, números, punto o guion bajo';
 
@@ -34,6 +36,14 @@ export class RegisterAccountDto extends RegisterDto {
   @IsString()
   @MaxLength(10)
   privacyVersion?: string;
+}
+
+/** Aceptar una versión nueva del aviso de privacidad. */
+export class AcceptPrivacyDto {
+  @ApiProperty({ type: String, example: '2026-10c' })
+  @IsString()
+  @Matches(PRIVACY_VERSION, { message: 'version no es una versión del aviso' })
+  version: string | undefined;
 }
 
 export class UpdateAccountDto {

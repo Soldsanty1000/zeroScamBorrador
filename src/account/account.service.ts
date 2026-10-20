@@ -22,6 +22,7 @@ import {
   Profile,
 } from './account.repository';
 import {
+  AcceptPrivacyDto,
   AccountResponseDto,
   RegisterAccountDto,
   UpdateAccountDto,
@@ -111,6 +112,19 @@ export class AccountService {
       email,
       bio: dto.bio!,
     });
+    return this.me(userId);
+  }
+
+  /**
+   * Registra que la persona aceptó una versión nueva del aviso de privacidad
+   * (la app la pide cuando el aviso cambia).
+   */
+  async acceptPrivacy(
+    userId: string,
+    dto: AcceptPrivacyDto,
+  ): Promise<AccountResponseDto> {
+    const me = await this.requireActive(userId);
+    await this.repository.acceptPrivacy(me.id, dto.version!);
     return this.me(userId);
   }
 

@@ -37,6 +37,7 @@ import { ROLES } from '../common/constants';
 import { MAX_IMAGE_BYTES } from '../common/files';
 import { AccountService } from './account.service';
 import {
+  AcceptPrivacyDto,
   AccountResponseDto,
   DeleteAccountDto,
   RegisterAccountDto,
@@ -91,6 +92,23 @@ export class AccountController {
     @Body() dto: UpdateAccountDto,
   ): Promise<AccountResponseDto> {
     return this.service.update(user.sub, dto);
+  }
+
+  @Patch('privacy')
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Aceptar el aviso de privacidad vigente',
+    description:
+      'Guarda la versión aceptada y la fecha. La app lo pide cuando el ' +
+      'aviso cambia.',
+  })
+  @ApiOkResponse({ type: AccountResponseDto })
+  acceptPrivacy(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: AcceptPrivacyDto,
+  ): Promise<AccountResponseDto> {
+    return this.service.acceptPrivacy(user.sub, dto);
   }
 
   @Patch('preferences')
