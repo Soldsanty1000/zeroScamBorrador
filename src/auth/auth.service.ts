@@ -168,10 +168,9 @@ export class AuthService {
     // contraseña los refresh tokens de antes dejan de servir (quien tuviera
     // la cuenta pierde el acceso al vencer su access token de 15 minutos).
     const user = await this.users.findById(payload.sub);
-    const changed = user?.passwordChangedAt
-      ? Math.floor(user.passwordChangedAt.getTime() / 1000)
-      : 0;
-    if (!user || user.accountStatus !== 'ACTIVO' || payload.iat < changed) {
+    const changed = user?.passwordChangedAt?.getTime() ?? 0;
+    const issued = payload.iatMs ?? payload.iat * 1000;
+    if (!user || user.accountStatus !== 'ACTIVO' || issued < changed) {
       throw new UnauthorizedException('Refresh token inválido');
     }
     const accessToken = sign(
@@ -214,8 +213,8 @@ export class AuthService {
    * @param userId - `sub` del access token.
    * @param dto - Password actual, nuevo, `challengeId` y código.
    * @throws {@link UnauthorizedException} si la cuenta del token ya no existe.
-   * @throws {@link BadRequestException} si el password actual no coincide, el
-   * nuevo es igual al actual o el código no sirve.
+   * @throws {@link BadRequestException} si el nuevo es igual al actual, el
+   * código no sirve o el password actual no coincide (el código ya se gastó).
    */
   async changePassword(
     userId: string,
@@ -225,24 +224,30 @@ export class AuthService {
     if (!user || user.accountStatus !== 'ACTIVO') {
       throw new UnauthorizedException('El usuario no existe');
     }
-    // Pedir el password actual evita que alguien con un token ajeno (o con
-    // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
-    // no un 401: el token es válido, lo que está mal es el dato.
-    if (!(await verifyPassword(dto.currentPassword!, user.passwordHash))) {
-      throw new BadRequestException('El password actual es incorrecto');
-    }
     if (dto.newPassword === dto.currentPassword) {
       throw new BadRequestException(
         'El password nuevo debe ser distinto al actual',
       );
     }
+    // El código va antes que el password actual: sin un código del correo,
+    // un token robado no sirve para adivinar el password, y con él cada
+    // intento gasta el código (3 códigos cada 15 minutos).
     const owner = await this.emailCodes.verify(
       dto.challengeId!,
       dto.code!,
       'CAMBIAR',
+      user.id,
     );
     if (owner !== user.id) {
       throw new BadRequestException('El código no es válido o ya expiró');
+    }
+    // Pedir el password actual evita que alguien con un token ajeno (o con
+    // la sesión abierta de otra persona) se quede con la cuenta. Es un 400 y
+    // no un 401: el token es válido, lo que está mal es el dato.
+    if (!(await verifyPassword(dto.currentPassword!, user.passwordHash))) {
+      throw new BadRequestException(
+        'El password actual es incorrecto. Pide un código nuevo.',
+      );
     }
     await this.users.updatePassword(
       userId,

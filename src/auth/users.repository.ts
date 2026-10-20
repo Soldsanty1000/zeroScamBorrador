@@ -161,10 +161,12 @@ export class UsersRepository {
    * @param passwordHash - Hash del password nuevo (ver `auth/password.ts`).
    */
   async updatePassword(id: string, passwordHash: string): Promise<void> {
-    // La fecha del cambio invalida los refresh tokens emitidos antes.
+    // La fecha del cambio invalida los refresh tokens emitidos antes. Va con
+    // milisegundos y la pone Node, no `NOW()`: se compara con la hora de
+    // emisión del token, que también sale del reloj de Node.
     await this.pool.query(
-      'UPDATE Usuario SET contrasena_hash = ?, contrasena_cambiada = NOW() WHERE id_usuario = ?',
-      [passwordHash, id],
+      'UPDATE Usuario SET contrasena_hash = ?, contrasena_cambiada = ? WHERE id_usuario = ?',
+      [passwordHash, new Date(), id],
     );
   }
 }

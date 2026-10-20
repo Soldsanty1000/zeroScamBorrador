@@ -57,7 +57,7 @@ CREATE TABLE Usuario (
   pref_perfil_publico  BOOLEAN      NOT NULL DEFAULT FALSE,
   pref_analiticas      BOOLEAN      NOT NULL DEFAULT TRUE,
   version_aviso        VARCHAR(10)  NULL COMMENT 'Versión del aviso de privacidad aceptada',
-  contrasena_cambiada  DATETIME     NULL COMMENT 'Último cambio de contraseña; los refresh tokens anteriores ya no sirven',
+  contrasena_cambiada  DATETIME(3)  NULL COMMENT 'Último cambio de contraseña; los refresh tokens anteriores ya no sirven',
   FOREIGN KEY (id_rol) REFERENCES Rol(id_rol)
 );
 

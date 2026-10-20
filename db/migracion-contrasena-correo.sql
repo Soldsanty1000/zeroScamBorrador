@@ -11,11 +11,16 @@ SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS
                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Usuario'
                  AND COLUMN_NAME = 'contrasena_cambiada');
 SET @sql := IF(@falta,
-  'ALTER TABLE Usuario ADD COLUMN contrasena_cambiada DATETIME NULL COMMENT ''Último cambio de contraseña; los refresh tokens anteriores ya no sirven''',
+  'ALTER TABLE Usuario ADD COLUMN contrasena_cambiada DATETIME(3) NULL COMMENT ''Último cambio de contraseña; los refresh tokens anteriores ya no sirven''',
   'SELECT 1');
 PREPARE paso FROM @sql;
 EXECUTE paso;
 DEALLOCATE PREPARE paso;
+-- Con milisegundos: se compara con la hora de emisión del token, y por
+-- segundo uno emitido en el mismo segundo del cambio pasaría como posterior.
+-- Arregla también una base donde ya se corrió la versión sin milisegundos.
+ALTER TABLE Usuario MODIFY COLUMN contrasena_cambiada DATETIME(3) NULL
+  COMMENT 'Último cambio de contraseña; los refresh tokens anteriores ya no sirven';
 
 -- Código de un solo uso enviado por correo para recuperar (RECUPERAR) o
 -- cambiar (CAMBIAR) la contraseña. Se guarda su hash; a los 3 intentos

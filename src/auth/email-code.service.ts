@@ -5,7 +5,7 @@ import {
   randomInt,
   timingSafeEqual,
 } from 'node:crypto';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { DB_POOL } from '../database/database.module';
 import { MailService } from './mail.service';
 
@@ -99,18 +99,38 @@ export class EmailCodeService {
   /**
    * Comprueba un código y lo consume.
    *
+   * El intento se gasta antes de comparar y en una sola sentencia
+   * (`intentos < MAX_ATTEMPTS`): si se leyera primero y se sumara después,
+   * varias peticiones simultáneas leerían todas los mismos intentos y
+   * probarían más códigos de los permitidos.
+   *
+   * @param userId - Con sesión (CAMBIAR), la cuenta que lo usa: el desafío
+   * de otra cuenta ni se toca, así que no le gasta intentos a su dueño.
    * @returns El `id_usuario` dueño del código, o `undefined` si el desafío
-   * no existe, expiró, es de otro propósito o el código no coincide. Tres
-   * fallos borran el desafío.
+   * no existe, expiró, es de otro propósito o de otra cuenta, ya no le
+   * quedan intentos o el código no coincide. Tres fallos borran el desafío.
    */
   async verify(
     challengeId: string,
     code: string,
     purpose: EmailCodePurpose,
+    userId?: string,
   ): Promise<string | undefined> {
+    const params: (string | number)[] = [challengeId, purpose];
+    let owner = '';
+    if (userId !== undefined) {
+      owner = ' AND id_usuario = ?';
+      params.push(userId);
+    }
+    const [spent] = await this.pool.query<ResultSetHeader>(
+      `UPDATE Codigo_Correo SET intentos = intentos + 1
+       WHERE id_codigo = ? AND proposito = ?${owner} AND expira > NOW() AND intentos < ?`,
+      [...params, MAX_ATTEMPTS],
+    );
+    if (spent.affectedRows === 0) return undefined;
     const [rows] = await this.pool.query<RowDataPacket[]>(
-      'SELECT id_usuario, codigo_hash, intentos FROM Codigo_Correo WHERE id_codigo = ? AND proposito = ? AND expira > NOW()',
-      [challengeId, purpose],
+      'SELECT id_usuario, codigo_hash, intentos FROM Codigo_Correo WHERE id_codigo = ?',
+      [challengeId],
     );
     const row = rows[0];
     if (!row) return undefined;
@@ -119,18 +139,13 @@ export class EmailCodeService {
       Buffer.from(sha256(code)),
     );
     if (!ok) {
-      if (Number(row.intentos) + 1 >= MAX_ATTEMPTS) {
-        await this.remove(challengeId);
-      } else {
-        await this.pool.query(
-          'UPDATE Codigo_Correo SET intentos = intentos + 1 WHERE id_codigo = ?',
-          [challengeId],
-        );
-      }
+      if (Number(row.intentos) >= MAX_ATTEMPTS) await this.remove(challengeId);
       return undefined;
     }
-    await this.remove(challengeId);
-    return String(row.id_usuario);
+    // Solo una petición puede consumirlo: si dos llegan con el código bueno
+    // a la vez, la que no borró la fila no pasa.
+    const consumed = await this.remove(challengeId);
+    return consumed ? String(row.id_usuario) : undefined;
   }
 
   /** Anula todos los códigos pendientes de una cuenta. */
@@ -156,10 +171,13 @@ export class EmailCodeService {
     this.sends.set(key, recent);
   }
 
-  private async remove(challengeId: string): Promise<void> {
-    await this.pool.query('DELETE FROM Codigo_Correo WHERE id_codigo = ?', [
-      challengeId,
-    ]);
+  /** Borra el desafío; dice si todavía estaba (para consumirlo una sola vez). */
+  private async remove(challengeId: string): Promise<boolean> {
+    const [result] = await this.pool.query<ResultSetHeader>(
+      'DELETE FROM Codigo_Correo WHERE id_codigo = ?',
+      [challengeId],
+    );
+    return result.affectedRows > 0;
   }
 }
 

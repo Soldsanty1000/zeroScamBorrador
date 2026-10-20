@@ -159,7 +159,7 @@ describe('AuthService: contraseña por correo', () => {
       users.findById.mockResolvedValue(await user());
       codes.verify.mockResolvedValue('7');
       const tokens = await service.changePassword('7', dto);
-      expect(codes.verify).toHaveBeenCalledWith(ID, '123456', 'CAMBIAR');
+      expect(codes.verify).toHaveBeenCalledWith(ID, '123456', 'CAMBIAR', '7');
       expect(tokens.accessToken).toBeTruthy();
       expect(tokens.refreshToken).toBeTruthy();
       expect(mail.sendPasswordChanged).toHaveBeenCalledWith(
@@ -178,11 +178,34 @@ describe('AuthService: contraseña por correo', () => {
       expect(users.updatePassword).not.toHaveBeenCalled();
     });
 
-    it('con el password actual incorrecto no gasta el código', async () => {
+    it('sin un código bueno no dice si el password actual es correcto', async () => {
       users.findById.mockResolvedValue(await user());
+      codes.verify.mockResolvedValue(undefined);
       await expect(
         service.changePassword('7', { ...dto, currentPassword: 'otra#000' }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toThrow('El código no es válido o ya expiró');
+      expect(users.updatePassword).not.toHaveBeenCalled();
+    });
+
+    it('con el password actual incorrecto el código ya se gastó', async () => {
+      users.findById.mockResolvedValue(await user());
+      codes.verify.mockResolvedValue('7');
+      await expect(
+        service.changePassword('7', { ...dto, currentPassword: 'otra#000' }),
+      ).rejects.toThrow('El password actual es incorrecto');
+      expect(codes.verify).toHaveBeenCalledTimes(1);
+      expect(users.updatePassword).not.toHaveBeenCalled();
+    });
+
+    it('un password nuevo igual al actual no gasta el código', async () => {
+      users.findById.mockResolvedValue(await user());
+      await expect(
+        service.changePassword('7', {
+          ...dto,
+          newPassword: 'actual#123',
+          currentPassword: 'actual#123',
+        }),
+      ).rejects.toThrow('distinto');
       expect(codes.verify).not.toHaveBeenCalled();
     });
 
@@ -230,6 +253,21 @@ describe('AuthService: contraseña por correo', () => {
       );
       await expect(
         service.refresh({ refreshToken: nuevo }),
+      ).resolves.toHaveProperty('accessToken');
+    });
+
+    it('en el mismo segundo del cambio: rechaza el de antes y acepta el de después', async () => {
+      const cambio = Math.floor(Date.now() / 1000) * 1000 + 500;
+      users.findById.mockResolvedValue(
+        await user({ passwordChangedAt: new Date(cambio) }),
+      );
+      const antes = token((cambio - 300) / 1000);
+      const despues = token((cambio + 1) / 1000);
+      await expect(
+        service.refresh({ refreshToken: antes }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(
+        service.refresh({ refreshToken: despues }),
       ).resolves.toHaveProperty('accessToken');
     });
 
